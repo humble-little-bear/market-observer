@@ -1,0 +1,35 @@
+{
+  "name": "market-observer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first, read-only cryptocurrency & gold market observation system using Binance public APIs. No trades. No withdrawals. No account mutation.",
+  "main": "dist/cli.js",
+  "bin": {
+    "observe": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "start": "node dist/cli.js",
+    "collect": "node dist/cli.js collect",
+    "analyze": "node dist/cli.js analyze",
+    "report": "node dist/cli.js report",
+    "run": "node dist/cli.js run",
+    "cron": "node dist/cli.js cron"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "commander": "^12.1.0",
+    "node-cron": "^3.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.7.4",
+    "@types/node-cron": "^3.0.11",
+    "typescript": "^5.6.2"
+  }
+}

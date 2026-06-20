@@ -1,0 +1,383 @@
+import Database from "better-sqlite3";
+import type {
+  Candle,
+  Indicator,
+  Interval,
+  Market,
+  Observation,
+  SymbolStatus,
+} from "../types.js";
+
+export class Repository {
+  private readonly db: Database.Database;
+
+  // Prepared statements (compiled once).
+  private readonly upsertCandleStmt: Database.Statement;
+  private readonly upsertIndicatorStmt: Database.Statement;
+  private readonly insertObservationStmt: Database.Statement;
+  private readonly upsertReportStmt: Database.Statement;
+  private readonly setSymbolStatusStmt: Database.Statement;
+  private readonly countCandlesStmt: Database.Statement;
+  private readonly latestCandleStmt: Database.Statement;
+  private readonly latestIndicatorsStmt: Database.Statement;
+  private readonly latestObservationStmt: Database.Statement;
+  private readonly observationByMarketDateStmt: Database.Statement;
+  private readonly allLatestObservationsStmt: Database.Statement;
+  private readonly hasObservationStmt: Database.Statement;
+
+  constructor(db: Database.Database) {
+    this.db = db;
+    this.upsertCandleStmt = db.prepare(
+      `INSERT INTO candles
+         (market, interval, open_time, open, high, low, close, volume, close_time)
+       VALUES (@market, @interval, @openTime, @open, @high, @low, @close, @volume, @closeTime)
+       ON CONFLICT(market, interval, open_time) DO UPDATE SET
+         open = excluded.open,
+         high = excluded.high,
+         low  = excluded.low,
+         close = excluded.close,
+         volume = excluded.volume,
+         close_time = excluded.close_time`,
+    );
+    this.upsertIndicatorStmt = db.prepare(
+      `INSERT INTO indicators
+         (market, interval, open_time, ema20, ema60, atr, atr_pct, rsi, macd, macd_signal, macd_hist)
+       VALUES (@market, @interval, @openTime, @ema20, @ema60, @atr, @atr_pct, @rsi, @macd, @macd_signal, @macd_hist)
+       ON CONFLICT(market, interval, open_time) DO UPDATE SET
+         ema20       = excluded.ema20,
+         ema60       = excluded.ema60,
+         atr         = excluded.atr,
+         atr_pct     = excluded.atr_pct,
+         rsi         = excluded.rsi,
+         macd        = excluded.macd,
+         macd_signal = excluded.macd_signal,
+         macd_hist   = excluded.macd_hist`,
+    );
+    this.insertObservationStmt = db.prepare(
+      `INSERT INTO observations
+         (market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary)
+       VALUES (@market, @interval, @ts, @close, @strategyBias, @confidence, @trend, @volatility, @summary)`,
+    );
+    this.upsertReportStmt = db.prepare(
+      `INSERT INTO reports (date, path, content)
+       VALUES (@date, @path, @content)
+       ON CONFLICT(date) DO UPDATE SET
+         path    = excluded.path,
+         content = excluded.content`,
+    );
+    this.setSymbolStatusStmt = db.prepare(
+      `INSERT INTO symbol_status (market, available, last_checked, note)
+       VALUES (@market, @available, @lastChecked, @note)
+       ON CONFLICT(market) DO UPDATE SET
+         available    = excluded.available,
+         last_checked = excluded.last_checked,
+         note         = excluded.note`,
+    );
+    this.countCandlesStmt = db.prepare(
+      `SELECT COUNT(*) AS n FROM candles WHERE market = ? AND interval = ?`,
+    );
+    this.latestCandleStmt = db.prepare(
+      `SELECT market, interval, open_time, open, high, low, close, volume, close_time
+         FROM candles
+        WHERE market = ? AND interval = ? AND open_time <= ?
+        ORDER BY open_time DESC
+        LIMIT ?`,
+    );
+    this.latestIndicatorsStmt = db.prepare(
+      `SELECT market, interval, open_time, ema20, ema60, atr, atr_pct, rsi, macd, macd_signal, macd_hist
+         FROM indicators
+        WHERE market = ? AND interval = ? AND open_time <= ?
+        ORDER BY open_time DESC
+        LIMIT ?`,
+    );
+    this.latestObservationStmt = db.prepare(
+      `SELECT id, market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary
+         FROM observations
+        WHERE market = ? AND interval = ?
+        ORDER BY ts DESC
+        LIMIT 1`,
+    );
+    this.observationByMarketDateStmt = db.prepare(
+      `SELECT id, market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary
+         FROM observations
+        WHERE market = ? AND interval = ?
+           AND ts >= ? AND ts < ?
+        ORDER BY ts DESC
+        LIMIT 1`,
+    );
+    this.allLatestObservationsStmt = db.prepare(
+      `SELECT o.market, o.interval, o.ts, o.close, o.strategy_bias, o.confidence, o.trend,
+              o.volatility, o.summary
+         FROM observations o
+         JOIN (
+           SELECT market, MAX(ts) AS max_ts
+             FROM observations
+            WHERE interval = ?
+            GROUP BY market
+         ) m ON m.market = o.market AND m.max_ts = o.ts
+        WHERE o.interval = ?`,
+    );
+    this.hasObservationStmt = db.prepare(
+      `SELECT 1 FROM observations WHERE market = ? AND interval = ? LIMIT 1`,
+    );
+  }
+
+  upsertCandles(candles: readonly Candle[]): number {
+    if (candles.length === 0) return 0;
+    const tx = this.db.transaction((rows: readonly Candle[]) => {
+      let n = 0;
+      for (const c of rows) {
+        this.upsertCandleStmt.run({
+          market: c.market,
+          interval: c.interval,
+          openTime: c.openTime,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+          closeTime: c.closeTime,
+        });
+        n++;
+      }
+      return n;
+    });
+    return tx(candles);
+  }
+
+  upsertIndicators(rows: readonly Indicator[]): number {
+    if (rows.length === 0) return 0;
+    const tx = this.db.transaction((rows: readonly Indicator[]) => {
+      let n = 0;
+      for (const r of rows) {
+        this.upsertIndicatorStmt.run({
+          market: r.market,
+          interval: r.interval,
+          openTime: r.openTime,
+          ema20: r.ema20,
+          ema60: r.ema60,
+          atr: r.atr,
+          atr_pct: r.atrPct,
+          rsi: r.rsi,
+          macd: r.macd,
+          macd_signal: r.macdSignal,
+          macd_hist: r.macdHist,
+        });
+        n++;
+      }
+      return n;
+    });
+    return tx(rows);
+  }
+
+  insertObservation(obs: Observation): number {
+    const info = this.insertObservationStmt.run({
+      market: obs.market,
+      interval: obs.interval,
+      ts: obs.ts,
+      close: obs.close,
+      strategyBias: obs.strategyBias,
+      confidence: obs.confidence,
+      trend: obs.trend,
+      volatility: obs.volatility,
+      summary: obs.summary,
+    });
+    return Number(info.lastInsertRowid);
+  }
+
+  insertObservations(obs: readonly Observation[]): number {
+    if (obs.length === 0) return 0;
+    const tx = this.db.transaction((rows: readonly Observation[]) => {
+      let n = 0;
+      for (const o of rows) this.insertObservation(o);
+      n += rows.length;
+      return n;
+    });
+    return tx(obs);
+  }
+
+  upsertReport(date: string, filePath: string, content: string): void {
+    this.upsertReportStmt.run({ date, path: filePath, content });
+  }
+
+  setSymbolStatus(s: SymbolStatus): void {
+    this.setSymbolStatusStmt.run({
+      market: s.market,
+      available: s.available,
+      lastChecked: s.lastChecked,
+      note: s.note ?? null,
+    });
+  }
+
+  countCandles(market: Market, interval: Interval): number {
+    const row = this.countCandlesStmt.get(market, interval) as { n: number };
+    return row.n;
+  }
+
+  queryLatestCandles(
+    market: Market,
+    interval: Interval,
+    upToOpenTimeMs: number,
+    limit: number,
+  ): Candle[] {
+    const rows = this.latestCandleStmt.all(market, interval, upToOpenTimeMs, limit) as Array<{
+      market: string;
+      interval: string;
+      open_time: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+      close_time: number;
+    }>;
+    return rows.map((r) => ({
+      market: r.market as Market,
+      interval: r.interval as Interval,
+      openTime: r.open_time,
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
+      volume: r.volume,
+      closeTime: r.close_time,
+    }));
+  }
+
+  queryLatestIndicators(
+    market: Market,
+    interval: Interval,
+    upToOpenTimeMs: number,
+    limit: number,
+  ): Indicator[] {
+    const rows = this.latestIndicatorsStmt.all(
+      market,
+      interval,
+      upToOpenTimeMs,
+      limit,
+    ) as Array<{
+      market: string;
+      interval: string;
+      open_time: number;
+      ema20: number | null;
+      ema60: number | null;
+      atr: number | null;
+      atr_pct: number | null;
+      rsi: number | null;
+      macd: number | null;
+      macd_signal: number | null;
+      macd_hist: number | null;
+    }>;
+    return rows.map((r) => ({
+      market: r.market as Market,
+      interval: r.interval as Interval,
+      openTime: r.open_time,
+      ema20: r.ema20,
+      ema60: r.ema60,
+      atr: r.atr,
+      atrPct: r.atr_pct,
+      rsi: r.rsi,
+      macd: r.macd,
+      macdSignal: r.macd_signal,
+      macdHist: r.macd_hist,
+    }));
+  }
+
+  queryLatestObservation(market: Market, interval: Interval): Observation | null {
+    const row = this.latestObservationStmt.get(market, interval) as
+      | {
+          id: number;
+          market: string;
+          interval: string;
+          ts: number;
+          close: number;
+          strategy_bias: string;
+          confidence: number;
+          trend: string;
+          volatility: string;
+          summary: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      market: row.market as Market,
+      interval: row.interval as Interval,
+      ts: row.ts,
+      close: row.close,
+      strategyBias: "observe",
+      confidence: row.confidence,
+      trend: row.trend as Observation["trend"],
+      volatility: row.volatility as Observation["volatility"],
+      summary: row.summary,
+    };
+  }
+
+  queryLatestObservationsForInterval(interval: Interval): Observation[] {
+    const rows = this.allLatestObservationsStmt.all(interval, interval) as Array<{
+      market: string;
+      interval: string;
+      ts: number;
+      close: number;
+      strategy_bias: string;
+      confidence: number;
+      trend: string;
+      volatility: string;
+      summary: string;
+    }>;
+    return rows.map((r) => ({
+      market: r.market as Market,
+      interval: r.interval as Interval,
+      ts: r.ts,
+      close: r.close,
+      strategyBias: "observe",
+      confidence: r.confidence,
+      trend: r.trend as Observation["trend"],
+      volatility: r.volatility as Observation["volatility"],
+      summary: r.summary,
+    }));
+  }
+
+  queryObservationOnDate(
+    market: Market,
+    interval: Interval,
+    dayStartMs: number,
+    dayEndMs: number,
+  ): Observation | null {
+    const row = this.observationByMarketDateStmt.get(
+      market,
+      interval,
+      dayStartMs,
+      dayEndMs,
+    ) as
+      | {
+          id: number;
+          market: string;
+          interval: string;
+          ts: number;
+          close: number;
+          strategy_bias: string;
+          confidence: number;
+          trend: string;
+          volatility: string;
+          summary: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      market: row.market as Market,
+      interval: row.interval as Interval,
+      ts: row.ts,
+      close: row.close,
+      strategyBias: "observe",
+      confidence: row.confidence,
+      trend: row.trend as Observation["trend"],
+      volatility: row.volatility as Observation["volatility"],
+      summary: row.summary,
+    };
+  }
+
+  hasAnyObservation(market: Market, interval: Interval): boolean {
+    const row = this.hasObservationStmt.get(market, interval);
+    return row !== undefined;
+  }
+}
