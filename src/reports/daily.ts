@@ -96,32 +96,39 @@ function buildChangesSinceYesterday(
   todayObs: Map<Market, Observation>,
   today: Date,
 ): string {
-  const yesterday = previousDay(today);
-  const dayStart = startOfDayUtc(yesterday).getTime();
-  const dayEnd = startOfDayUtc(today).getTime();
-
   const lines: string[] = [];
   let hasAny = false;
 
   for (const market of config.markets) {
     const today = todayObs.get(market);
-    const yesterday = repo.queryObservationOnDate(market, PRIMARY_OBSERVATION_INTERVAL, dayStart, dayEnd);
-
     if (!today) {
       continue;
     }
 
     hasAny = true;
-    if (!yesterday) {
+
+    // The latest closed candle may belong to the previous UTC day (e.g., when
+    // the report runs before the first candle of today closes). Anchor the
+    // "prior" lookup to the UTC day of the current observation, not the report
+    // generation time, so we compare against the previous day's close.
+    const todayObsDayStart = startOfDayUtc(new Date(today.ts)).getTime();
+    const yesterdayObsDayStart = startOfDayUtc(previousDay(new Date(today.ts))).getTime();
+    const prior = repo.queryLatestObservationBeforeTs(
+      market,
+      PRIMARY_OBSERVATION_INTERVAL,
+      todayObsDayStart,
+    );
+
+    if (!prior) {
       lines.push(`- **${market}:** no prior observation from yesterday to compare.`);
       continue;
     }
 
-    const priceDelta = today.close - yesterday.close;
-    const priceDeltaPct = yesterday.close !== 0 ? (priceDelta / yesterday.close) * 100 : 0;
-    const trendChanged = today.trend !== yesterday.trend ? ` trend changed from ${yesterday.trend} to ${today.trend}` : "";
-    const volChanged = today.volatility !== yesterday.volatility
-      ? ` volatility shifted from ${yesterday.volatility} to ${today.volatility}`
+    const priceDelta = today.close - prior.close;
+    const priceDeltaPct = prior.close !== 0 ? (priceDelta / prior.close) * 100 : 0;
+    const trendChanged = today.trend !== prior.trend ? ` trend changed from ${prior.trend} to ${today.trend}` : "";
+    const volChanged = today.volatility !== prior.volatility
+      ? ` volatility shifted from ${prior.volatility} to ${today.volatility}`
       : "";
 
     const parts: string[] = [];
@@ -131,7 +138,13 @@ function buildChangesSinceYesterday(
     if (trendChanged) parts.push(trendChanged.trim());
     if (volChanged) parts.push(volChanged.trim());
 
-    lines.push(`- **${market}:** ${parts.join("; ")}.`);
+    // If the prior observation is older than the day before the current one,
+    // label it so the report is honest about the comparison baseline.
+    const ageLabel = prior.ts < yesterdayObsDayStart
+      ? ` (vs ${dateToYyyyMmDd(new Date(prior.ts))})`
+      : "";
+
+    lines.push(`- **${market}:** ${parts.join("; ")}.${ageLabel}`);
   }
 
   if (!hasAny) {

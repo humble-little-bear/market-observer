@@ -22,6 +22,7 @@ export class Repository {
   private readonly latestIndicatorsStmt: Database.Statement;
   private readonly latestObservationStmt: Database.Statement;
   private readonly observationByMarketDateStmt: Database.Statement;
+  private readonly latestObservationBeforeTsStmt: Database.Statement;
   private readonly allLatestObservationsStmt: Database.Statement;
   private readonly hasObservationStmt: Database.Statement;
 
@@ -56,7 +57,14 @@ export class Repository {
     this.insertObservationStmt = db.prepare(
       `INSERT INTO observations
          (market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary)
-       VALUES (@market, @interval, @ts, @close, @strategyBias, @confidence, @trend, @volatility, @summary)`,
+       VALUES (@market, @interval, @ts, @close, @strategyBias, @confidence, @trend, @volatility, @summary)
+       ON CONFLICT(market, interval, ts) DO UPDATE SET
+         close         = excluded.close,
+         strategy_bias = excluded.strategy_bias,
+         confidence    = excluded.confidence,
+         trend         = excluded.trend,
+         volatility    = excluded.volatility,
+         summary       = excluded.summary`,
     );
     this.upsertReportStmt = db.prepare(
       `INSERT INTO reports (date, path, content)
@@ -102,6 +110,13 @@ export class Repository {
          FROM observations
         WHERE market = ? AND interval = ?
            AND ts >= ? AND ts < ?
+        ORDER BY ts DESC
+        LIMIT 1`,
+    );
+    this.latestObservationBeforeTsStmt = db.prepare(
+      `SELECT id, market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary
+         FROM observations
+        WHERE market = ? AND interval = ? AND ts < ?
         ORDER BY ts DESC
         LIMIT 1`,
     );
@@ -348,6 +363,43 @@ export class Repository {
       interval,
       dayStartMs,
       dayEndMs,
+    ) as
+      | {
+          id: number;
+          market: string;
+          interval: string;
+          ts: number;
+          close: number;
+          strategy_bias: string;
+          confidence: number;
+          trend: string;
+          volatility: string;
+          summary: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      market: row.market as Market,
+      interval: row.interval as Interval,
+      ts: row.ts,
+      close: row.close,
+      strategyBias: "observe",
+      confidence: row.confidence,
+      trend: row.trend as Observation["trend"],
+      volatility: row.volatility as Observation["volatility"],
+      summary: row.summary,
+    };
+  }
+
+  queryLatestObservationBeforeTs(
+    market: Market,
+    interval: Interval,
+    beforeTs: number,
+  ): Observation | null {
+    const row = this.latestObservationBeforeTsStmt.get(
+      market,
+      interval,
+      beforeTs,
     ) as
       | {
           id: number;
