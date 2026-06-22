@@ -182,7 +182,6 @@ export function observeMarket(
   market: Market,
   candles: readonly Candle[],
   indicators: ReturnType<typeof computeIndicators>,
-  now: number = Date.now(),
 ): Observation | null {
   if (candles.length === 0 || indicators.length === 0) return null;
   const lastCandle = candles[candles.length - 1]!;
@@ -227,7 +226,10 @@ export function observeMarket(
     trend,
     volatility,
     summary,
-    ts: now,
+    // Anchor the observation to the market data it describes, not the analyze
+    // run time. This makes day-over-day comparisons deterministic and avoids
+    // timezone/boundary issues caused by wall-clock timestamps.
+    ts: lastCandle.closeTime,
     close: lastCandle.close,
   };
 }
@@ -275,7 +277,7 @@ export async function runAnalyze(opts: AnalyzeOptions = {}): Promise<AnalyzeResu
       logger.info(`analyze ${market} ${interval}: ${candles.length} candles → ${upserted} indicator rows`);
 
       // Emit one observation per (market, interval). The daily report uses 4h.
-      const obs = observeMarket(market, candles, indicators, now);
+      const obs = observeMarket(market, candles, indicators);
       if (obs) {
         repo.insertObservation(obs);
         totalObservations++;

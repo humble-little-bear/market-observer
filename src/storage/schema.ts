@@ -55,6 +55,9 @@ export const DDL: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_observations_market_ts
      ON observations (market, ts DESC);`,
 
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_market_interval_ts
+     ON observations (market, interval, ts);`,
+
   `CREATE TABLE IF NOT EXISTS reports (
      date     TEXT PRIMARY KEY,
      path     TEXT NOT NULL,
