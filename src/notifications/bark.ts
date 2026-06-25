@@ -29,6 +29,8 @@ type BarkResponse = {
   timestamp?: number;
 };
 
+type AlertData = Record<string, unknown>;
+
 function fmtPriceAdaptive(x: number): string {
   if (!Number.isFinite(x) || x === 0) return x.toString();
   const ax = Math.abs(x);
@@ -52,6 +54,95 @@ function trendMark(trend: Observation["trend"]): string {
       return "down";
     case "ranging":
       return "flat";
+  }
+}
+
+function trendZh(value: unknown): string {
+  switch (value) {
+    case "bullish":
+      return "多头";
+    case "bearish":
+      return "空头";
+    case "ranging":
+      return "震荡";
+    default:
+      return String(value);
+  }
+}
+
+function volatilityZh(value: unknown): string {
+  switch (value) {
+    case "low":
+      return "低";
+    case "normal":
+      return "正常";
+    case "elevated":
+      return "升高";
+    case "high":
+      return "高";
+    default:
+      return String(value);
+  }
+}
+
+function numberFromData(data: AlertData, key: string): number | null {
+  const value = data[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseAlertData(event: AlertEvent): AlertData {
+  try {
+    const parsed = JSON.parse(event.dataJson) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as AlertData;
+    }
+  } catch {
+    // Fall through to an empty object. The original English body remains a
+    // reasonable fallback when old rows do not have parseable metadata.
+  }
+  return {};
+}
+
+function buildChineseAlertMessage(event: AlertEvent): { title: string; body: string } {
+  const data = parseAlertData(event);
+  const close = numberFromData(data, "close");
+
+  switch (event.type) {
+    case "trend_change": {
+      const previousTrend = trendZh(data.previousTrend);
+      const trend = trendZh(data.trend);
+      const confidence = numberFromData(data, "confidence");
+      const confidenceText = confidence === null ? "" : `，置信度 ${(confidence * 100).toFixed(0)}%`;
+      return {
+        title: `${event.market} ${event.interval} 趋势变化`,
+        body: `${previousTrend} -> ${trend}${close === null ? "" : `，收盘 ${close}`}${confidenceText}`,
+      };
+    }
+    case "volatility_upgrade": {
+      const previousVolatility = volatilityZh(data.previousVolatility);
+      const volatility = volatilityZh(data.volatility);
+      return {
+        title: `${event.market} ${event.interval} 波动升高`,
+        body: `${previousVolatility} -> ${volatility}，趋势 ${trendZh(data.trend)}${close === null ? "" : `，收盘 ${close}`}`,
+      };
+    }
+    case "sharp_move": {
+      const changePct = numberFromData(data, "changePct");
+      const thresholdPct = numberFromData(data, "thresholdPct");
+      const direction = changePct === null || changePct >= 0 ? "急涨" : "急跌";
+      const changeText = changePct === null ? "触发急涨急跌" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+      const thresholdText = thresholdPct === null ? "" : `，阈值 ${thresholdPct}%`;
+      return {
+        title: `${event.market} ${event.interval} ${direction}`,
+        body: `${event.interval} ${changeText}${close === null ? "" : `，收盘 ${close}`}${thresholdText}`,
+      };
+    }
+    case "multi_timeframe_alignment": {
+      return {
+        title: `${event.market} 1h/4h 同向`,
+        body: `1h 和 4h 同为${trendZh(data.trend)}，值得留意`,
+      };
+    }
   }
 }
 
@@ -146,8 +237,7 @@ function barkLevelForSeverity(severity: AlertEvent["severity"]): BarkPayload["le
 export async function sendBarkAlert(event: AlertEvent, opts: NotifyOptions = {}): Promise<NotifyResult> {
   const logger = opts.logger ?? makeLogger(config.logLevel);
   const bark = getBarkConfig();
-  const title = event.title;
-  const body = event.body;
+  const { title, body } = buildChineseAlertMessage(event);
 
   await postBark({
     device_key: bark.deviceKey,
