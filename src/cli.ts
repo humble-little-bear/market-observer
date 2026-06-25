@@ -4,7 +4,7 @@ import { makeLogger } from "./logger.js";
 import { runCollect } from "./collectors/collect.js";
 import { runAnalyze } from "./agents/observer.js";
 import { buildDailyReport } from "./reports/daily.js";
-import { sendBarkMarketSummary } from "./notifications/bark.js";
+import { dispatchPendingBarkAlerts, sendBarkMarketSummary } from "./notifications/bark.js";
 import { runDaemon } from "./daemon/worker.js";
 import { renderAlerts, renderStatus } from "./inspect/status.js";
 import cron from "node-cron";
@@ -111,6 +111,22 @@ export function buildProgram(): Command {
         process.exit(0);
       } catch (e) {
         log.error("notify failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("dispatch-alerts"))
+    .description("Send pending unsent alert events through Bark")
+    .action(async (opts: { logLevel?: string }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        const res = await dispatchPendingBarkAlerts({ logger: log });
+        log.info(`dispatch-alerts: sent=${res.sent}`);
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        log.error("dispatch-alerts failed", e);
         closeDb();
         process.exit(1);
       }

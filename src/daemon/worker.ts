@@ -99,6 +99,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   logger.info(`[daemon] tasks: ${describeTasks(tasks)}`);
   logger.info(`[daemon] min request gap: ${config.collectMinRequestIntervalMs}ms`);
   logger.info(`[daemon] bark alerts: ${notify ? "enabled" : "disabled"}`);
+  if (notify) {
+    const pushed = await dispatchPendingBarkAlerts({ logger });
+    logger.info(`[daemon] pushed pending alerts=${pushed.sent}`);
+  }
 
   while (!stopping) {
     tasks.sort((a, b) => a.nextDueMs - b.nextDueMs);

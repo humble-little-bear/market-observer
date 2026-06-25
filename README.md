@@ -78,6 +78,7 @@ node dist/cli.js collect   # fetch latest candles for all markets/intervals
 node dist/cli.js analyze   # compute indicators + emit observations
 node dist/cli.js report    # render reports/YYYY-MM-DD.md
 node dist/cli.js notify    # send latest 4h summary to Bark
+node dist/cli.js dispatch-alerts # send pending unsent alerts to Bark
 node dist/cli.js daemon    # long-lived collector → observer → alert worker
 node dist/cli.js status    # inspect DB freshness and latest observations
 node dist/cli.js alerts    # list recent alert events
@@ -98,6 +99,7 @@ node dist/cli.js daemon --notify
 node dist/cli.js status
 node dist/cli.js alerts --limit 20
 node dist/cli.js alerts --unsent
+node dist/cli.js dispatch-alerts
 ```
 
 After a `run`, check `data/observer.db` (SQLite) and `reports/YYYY-MM-DD.md`
@@ -130,7 +132,13 @@ node dist/cli.js daemon --notify
 `daemon` is the preferred always-on mode. It processes one `(market, interval)`
 at a time, enforces `COLLECT_MIN_REQUEST_INTERVAL_MS` between Binance requests,
 records observations, writes alert events, and only pushes newly created alerts
-when `--notify` is enabled.
+when `--notify` is enabled. On startup, `daemon --notify` also attempts to send
+any pending unsent alerts left over from a previous run or temporary Bark
+failure. You can trigger the same catch-up manually with:
+
+```bash
+node dist/cli.js dispatch-alerts
+```
 
 First-pass alert rules:
 
@@ -190,6 +198,7 @@ journalctl -u market-observer -n 100 --no-pager
 node dist/cli.js status
 node dist/cli.js alerts --limit 20
 node dist/cli.js alerts --unsent
+node dist/cli.js dispatch-alerts
 ```
 
 The Bark body is intentionally short for watch display:
