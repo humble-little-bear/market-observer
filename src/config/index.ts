@@ -1,20 +1,47 @@
 import { z } from "zod";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ALL_INTERVALS, ALL_MARKETS, type Interval, type Market } from "../types.js";
+import { ALL_INTERVALS, DEFAULT_MARKETS, type Interval, type Market } from "../types.js";
+import { assertSafeSymbol } from "../safety/guard.js";
 
 const LogLevelSchema = z.enum(["error", "warn", "info", "debug"]);
+const BarkLevelSchema = z.enum(["active", "timeSensitive", "passive"]).default("active");
+
+function optionalString(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  return value;
+}
 
 const EnvSchema = z.object({
   BINANCE_BASE_URL: z.string().url().default("https://api.binance.com"),
   DB_PATH: z.string().default("./data/observer.db"),
   LOG_LEVEL: LogLevelSchema.default("info"),
+  MARKETS: z.string().optional(),
+  INTERVALS: z.string().optional(),
+  COLLECT_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().positive().default(1200),
+  ALERT_SHARP_MOVE_15M_PCT: z.coerce.number().positive().default(1.5),
+  ALERT_SHARP_MOVE_1H_PCT: z.coerce.number().positive().default(3),
+  BARK_BASE_URL: z.preprocess(optionalString, z.string().url().optional()),
+  BARK_DEVICE_KEY: z.preprocess(optionalString, z.string().min(1).optional()),
+  BARK_GROUP: z.string().default("market-observer"),
+  BARK_LEVEL: BarkLevelSchema,
 });
 
 export type AppConfig = {
   binanceBaseUrl: string;
   dbPath: string;
   logLevel: z.infer<typeof LogLevelSchema>;
+  bark: {
+    baseUrl?: string;
+    deviceKey?: string;
+    group: string;
+    level: z.infer<typeof BarkLevelSchema>;
+  };
+  collectMinRequestIntervalMs: number;
+  alerts: {
+    sharpMove15mPct: number;
+    sharpMove1hPct: number;
+  };
   markets: readonly Market[];
   intervals: readonly Interval[];
   dataDir: string;
@@ -52,10 +79,21 @@ function buildConfig(): AppConfig {
     BINANCE_BASE_URL: merged.BINANCE_BASE_URL,
     DB_PATH: merged.DB_PATH,
     LOG_LEVEL: merged.LOG_LEVEL,
+    MARKETS: merged.MARKETS,
+    INTERVALS: merged.INTERVALS,
+    COLLECT_MIN_REQUEST_INTERVAL_MS: merged.COLLECT_MIN_REQUEST_INTERVAL_MS,
+    ALERT_SHARP_MOVE_15M_PCT: merged.ALERT_SHARP_MOVE_15M_PCT,
+    ALERT_SHARP_MOVE_1H_PCT: merged.ALERT_SHARP_MOVE_1H_PCT,
+    BARK_BASE_URL: merged.BARK_BASE_URL,
+    BARK_DEVICE_KEY: merged.BARK_DEVICE_KEY,
+    BARK_GROUP: merged.BARK_GROUP,
+    BARK_LEVEL: merged.BARK_LEVEL,
   });
 
   const dataDir = path.resolve(path.dirname(parsed.DB_PATH));
   const reportsDir = path.resolve("./reports");
+  const markets = parseMarkets(parsed.MARKETS);
+  const intervals = parseIntervals(parsed.INTERVALS);
 
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(reportsDir, { recursive: true });
@@ -64,11 +102,63 @@ function buildConfig(): AppConfig {
     binanceBaseUrl: parsed.BINANCE_BASE_URL.replace(/\/+$/, ""),
     dbPath: path.resolve(parsed.DB_PATH),
     logLevel: parsed.LOG_LEVEL,
-    markets: ALL_MARKETS,
-    intervals: ALL_INTERVALS,
+    bark: {
+      baseUrl: parsed.BARK_BASE_URL?.replace(/\/+$/, ""),
+      deviceKey: parsed.BARK_DEVICE_KEY,
+      group: parsed.BARK_GROUP,
+      level: parsed.BARK_LEVEL,
+    },
+    collectMinRequestIntervalMs: parsed.COLLECT_MIN_REQUEST_INTERVAL_MS,
+    alerts: {
+      sharpMove15mPct: parsed.ALERT_SHARP_MOVE_15M_PCT,
+      sharpMove1hPct: parsed.ALERT_SHARP_MOVE_1H_PCT,
+    },
+    markets,
+    intervals,
     dataDir,
     reportsDir,
   };
 }
 
 export const config: AppConfig = buildConfig();
+
+function parseMarkets(input: string | undefined): readonly Market[] {
+  if (input === undefined || input.trim() === "") return DEFAULT_MARKETS;
+
+  const seen = new Set<string>();
+  const markets: Market[] = [];
+  for (const raw of input.split(",")) {
+    const market = raw.trim().toUpperCase();
+    if (!market || seen.has(market)) continue;
+    assertSafeSymbol(market);
+    seen.add(market);
+    markets.push(market);
+  }
+
+  if (markets.length === 0) {
+    throw new Error("MARKETS must contain at least one Binance symbol");
+  }
+  return markets;
+}
+
+function parseIntervals(input: string | undefined): readonly Interval[] {
+  if (input === undefined || input.trim() === "") return ALL_INTERVALS;
+
+  const allowed = new Set<Interval>(ALL_INTERVALS);
+  const seen = new Set<string>();
+  const intervals: Interval[] = [];
+  for (const raw of input.split(",")) {
+    const interval = raw.trim() as Interval;
+    if (!interval || seen.has(interval)) continue;
+    if (!allowed.has(interval)) {
+      throw new Error(`INTERVALS contains unsupported interval: ${interval}`);
+    }
+    seen.add(interval);
+    intervals.push(interval);
+  }
+
+  if (intervals.length === 0) {
+    throw new Error("INTERVALS must contain at least one supported interval");
+  }
+  return intervals;
+}

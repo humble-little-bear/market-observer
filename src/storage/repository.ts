@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import type {
+  AlertEvent,
   Candle,
   Indicator,
   Interval,
@@ -25,6 +26,9 @@ export class Repository {
   private readonly latestObservationBeforeTsStmt: Database.Statement;
   private readonly allLatestObservationsStmt: Database.Statement;
   private readonly hasObservationStmt: Database.Statement;
+  private readonly insertAlertEventStmt: Database.Statement;
+  private readonly unsentAlertEventsStmt: Database.Statement;
+  private readonly markAlertEventSentStmt: Database.Statement;
 
   constructor(db: Database.Database) {
     this.db = db;
@@ -134,6 +138,21 @@ export class Repository {
     );
     this.hasObservationStmt = db.prepare(
       `SELECT 1 FROM observations WHERE market = ? AND interval = ? LIMIT 1`,
+    );
+    this.insertAlertEventStmt = db.prepare(
+      `INSERT OR IGNORE INTO alert_events
+         (market, interval, ts, type, severity, fingerprint, title, body, data_json, sent_at)
+       VALUES (@market, @interval, @ts, @type, @severity, @fingerprint, @title, @body, @dataJson, @sentAt)`,
+    );
+    this.unsentAlertEventsStmt = db.prepare(
+      `SELECT id, market, interval, ts, type, severity, fingerprint, title, body, data_json, sent_at
+         FROM alert_events
+        WHERE sent_at IS NULL
+        ORDER BY ts ASC, id ASC
+        LIMIT ?`,
+    );
+    this.markAlertEventSentStmt = db.prepare(
+      `UPDATE alert_events SET sent_at = ? WHERE id = ?`,
     );
   }
 
@@ -431,5 +450,54 @@ export class Repository {
   hasAnyObservation(market: Market, interval: Interval): boolean {
     const row = this.hasObservationStmt.get(market, interval);
     return row !== undefined;
+  }
+
+  insertAlertEvent(event: AlertEvent): boolean {
+    const info = this.insertAlertEventStmt.run({
+      market: event.market,
+      interval: event.interval,
+      ts: event.ts,
+      type: event.type,
+      severity: event.severity,
+      fingerprint: event.fingerprint,
+      title: event.title,
+      body: event.body,
+      dataJson: event.dataJson,
+      sentAt: event.sentAt,
+    });
+    return info.changes > 0;
+  }
+
+  queryUnsentAlertEvents(limit: number): AlertEvent[] {
+    const rows = this.unsentAlertEventsStmt.all(limit) as Array<{
+      id: number;
+      market: string;
+      interval: string;
+      ts: number;
+      type: AlertEvent["type"];
+      severity: AlertEvent["severity"];
+      fingerprint: string;
+      title: string;
+      body: string;
+      data_json: string;
+      sent_at: number | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      market: r.market as Market,
+      interval: r.interval as Interval,
+      ts: r.ts,
+      type: r.type,
+      severity: r.severity,
+      fingerprint: r.fingerprint,
+      title: r.title,
+      body: r.body,
+      dataJson: r.data_json,
+      sentAt: r.sent_at,
+    }));
+  }
+
+  markAlertEventSent(id: number, sentAt: number): void {
+    this.markAlertEventSentStmt.run(sentAt, id);
   }
 }

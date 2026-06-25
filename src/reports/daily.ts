@@ -20,12 +20,6 @@ export type BuildDailyReportResult = {
   path: string;
 };
 
-const REPORT_MARKETS: { section: string; markets: Market[] }[] = [
-  { section: "BTC", markets: ["BTCUSDT"] },
-  { section: "CKB", markets: ["CKBUSDT"] },
-  { section: "Gold", markets: ["XAUTUSDT", "XAUUSDT"] },
-];
-
 function fmtPriceAdaptive(x: number): string {
   if (!Number.isFinite(x) || x === 0) return x.toString();
   const ax = Math.abs(x);
@@ -33,6 +27,12 @@ function fmtPriceAdaptive(x: number): string {
   if (ax >= 1) return x.toFixed(4);
   if (ax >= 0.01) return x.toFixed(6);
   return x.toExponential(3);
+}
+
+function marketSectionTitle(market: Market): string {
+  if (market.endsWith("USDT")) return market.slice(0, -"USDT".length);
+  if (market.endsWith("USD")) return market.slice(0, -"USD".length);
+  return market;
 }
 
 function fmtTimestamp(ts: number): string {
@@ -252,20 +252,16 @@ export function buildDailyReport(opts: BuildDailyReportOptions = {}): BuildDaily
   sections.push(`Primary timeframe: **${PRIMARY_OBSERVATION_INTERVAL}**`);
   sections.push("");
 
-  for (const { section, markets } of REPORT_MARKETS) {
-    sections.push(`## ${section}`);
+  for (const market of config.markets) {
+    sections.push(`## ${marketSectionTitle(market)}`);
     sections.push("");
 
-    const entries: string[] = [];
-    for (const market of markets) {
-      const obs = todayObs.get(market);
-      if (!obs) {
-        entries.push(`_No ${PRIMARY_OBSERVATION_INTERVAL} observation available for ${market}._`);
-        continue;
-      }
-      entries.push(formatObservation(obs));
+    const obs = todayObs.get(market);
+    if (!obs) {
+      sections.push(`_No ${PRIMARY_OBSERVATION_INTERVAL} observation available for ${market}._`);
+    } else {
+      sections.push(formatObservation(obs));
     }
-    sections.push(entries.join("\n\n"));
     sections.push("");
   }
 
