@@ -70,4 +70,24 @@ export const DDL: readonly string[] = [
      last_checked  INTEGER NOT NULL,
      note          TEXT
    );`,
+
+  `CREATE TABLE IF NOT EXISTS alert_events (
+     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+     market       TEXT    NOT NULL,
+     interval     TEXT    NOT NULL,
+     ts           INTEGER NOT NULL,
+     type         TEXT    NOT NULL,
+     severity     TEXT    NOT NULL,
+     fingerprint  TEXT    NOT NULL UNIQUE,
+     title        TEXT    NOT NULL,
+     body         TEXT    NOT NULL,
+     data_json    TEXT    NOT NULL,
+     sent_at      INTEGER
+   );`,
+
+  `CREATE INDEX IF NOT EXISTS idx_alert_events_unsent
+     ON alert_events (sent_at, ts);`,
+
+  `CREATE INDEX IF NOT EXISTS idx_alert_events_market_ts
+     ON alert_events (market, ts DESC);`,
 ];

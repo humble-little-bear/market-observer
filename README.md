@@ -11,29 +11,40 @@ data.** See [SAFETY.md](./SAFETY.md) for the full invariant.
 
 ## Markets
 
-| Symbol   | Source         | Notes                          |
-| -------- | -------------- | ------------------------------ |
-| BTCUSDT  | spot (`/api/v3/klines`) | primary                  |
-| CKBUSDT  | spot (`/api/v3/klines`) | primary                  |
-| XAUTUSDT | spot (`/api/v3/klines`) | Tether Gold (spot)       |
-| XAUUSDT  | spot → futures  | spot returns -1121; falls back to `/fapi/v1/klines` |
+Default symbols: `BTCUSDT,CKBUSDT,XAUTUSDT,XAUUSDT`.
 
-If a symbol is unavailable on both surfaces, `symbol_status(market, 0, …)`
-is recorded and the rest of the run continues.
+Override the observed asset set with `MARKETS`:
+
+```bash
+MARKETS=BTCUSDT,ETHUSDT,SOLUSDT,XAUTUSDT
+```
+
+Each symbol is fetched from Binance spot first (`/api/v3/klines`). If Binance
+returns invalid symbol, the collector falls back to USDT-M futures
+(`/fapi/v1/klines`). If a symbol is unavailable on both surfaces,
+`symbol_status(market, 0, …)` is recorded and the rest of the run continues.
 
 ## Intervals
 
-`1m`, `5m`, `1h`, `4h`, `1d`. The primary observation timeframe used by
-the observer agent and the daily report is **`4h`**.
+Default intervals: `1m,5m,15m,1h,4h,1d`.
+
+Override them with `INTERVALS`:
+
+```bash
+INTERVALS=15m,1h,4h,1d
+```
+
+The primary observation timeframe used by the daily report and compact Bark
+summary is **`4h`**.
 
 ## Setup
 
-Requirements: Node ≥ 18, npm ≥ 10. Network access to `https://api.binance.com`.
+Requirements: Node ≥ 18, pnpm ≥ 10. Network access to `https://api.binance.com`.
 
 ```bash
 cd market-observer
-npm install
-npm run build
+pnpm install
+pnpm run build
 ```
 
 Configuration is read from environment variables (a `.env` file is
@@ -44,6 +55,15 @@ optional). All three have safe public defaults:
 | `BINANCE_BASE_URL` | `https://api.binance.com`    | public market data host       |
 | `DB_PATH`         | `./data/observer.db`          | local SQLite file             |
 | `LOG_LEVEL`       | `info`                        | `error`/`warn`/`info`/`debug` |
+| `MARKETS`         | `BTCUSDT,CKBUSDT,XAUTUSDT,XAUUSDT` | comma-separated Binance symbols |
+| `INTERVALS`       | `1m,5m,15m,1h,4h,1d`          | comma-separated Binance intervals |
+| `COLLECT_MIN_REQUEST_INTERVAL_MS` | `1200`        | daemon-mode global request gap |
+| `ALERT_SHARP_MOVE_15M_PCT` | `1.5`              | 15m sharp-move alert threshold |
+| `ALERT_SHARP_MOVE_1H_PCT` | `3`                 | 1h sharp-move alert threshold |
+| `BARK_BASE_URL`   | unset                         | optional Bark server URL      |
+| `BARK_DEVICE_KEY` | unset                         | optional Bark iOS device key  |
+| `BARK_GROUP`      | `market-observer`             | Bark notification group       |
+| `BARK_LEVEL`      | `active`                      | `active`/`timeSensitive`/`passive` |
 
 See `.env.example`.
 
@@ -57,14 +77,68 @@ node dist/cli.js run
 node dist/cli.js collect   # fetch latest candles for all markets/intervals
 node dist/cli.js analyze   # compute indicators + emit observations
 node dist/cli.js report    # render reports/YYYY-MM-DD.md
+node dist/cli.js notify    # send latest 4h summary to Bark
+node dist/cli.js daemon    # long-lived collector → observer → alert worker
 node dist/cli.js cron      # start the in-process scheduler (Ctrl+C to stop)
 
 # Optional market filter
 node dist/cli.js run --market BTCUSDT,XAUTUSDT
+
+# Optional push after a one-shot run or scheduled hourly report
+node dist/cli.js run --notify
+node dist/cli.js cron --notify
+
+# Recommended server mode: record continuously, push only alert events
+node dist/cli.js daemon
+node dist/cli.js daemon --notify
 ```
 
 After a `run`, check `data/observer.db` (SQLite) and `reports/YYYY-MM-DD.md`
 (the daily markdown report).
+
+## Bark notifications
+
+Set these in `.env` after your Bark server is reachable and the iPhone app
+has registered against it:
+
+```bash
+BARK_BASE_URL=https://bark.example.com
+BARK_DEVICE_KEY=your-device-key
+BARK_GROUP=market-observer
+BARK_LEVEL=active
+```
+
+Then send the latest compact market summary:
+
+```bash
+node dist/cli.js notify
+```
+
+For hands-off operation on a server, run the scheduler with push enabled:
+
+```bash
+node dist/cli.js daemon --notify
+```
+
+`daemon` is the preferred always-on mode. It processes one `(market, interval)`
+at a time, enforces `COLLECT_MIN_REQUEST_INTERVAL_MS` between Binance requests,
+records observations, writes alert events, and only pushes newly created alerts
+when `--notify` is enabled.
+
+First-pass alert rules:
+
+- 15m/1h sharp moves above configured percentage thresholds.
+- 1h/4h/1d trend changes.
+- Volatility upgrades into `elevated` or `high`.
+- 1h and 4h trend alignment when both are non-ranging.
+
+The Bark body is intentionally short for watch display:
+
+```text
+BTC 67123.45 up normal
+CKB 0.009123 flat elevated
+XAUT 2345.67 down normal
+```
 
 ## Project layout
 
@@ -87,6 +161,9 @@ market-observer/
       macd.ts               # MACD(12,26,9)
       compute.ts            # align everything by open_time
     agents/observer.ts      # latest indicators → structured Observation
+    alerts/rules.ts         # observation/candle rules → deduplicated alert events
+    daemon/worker.ts        # long-lived paced worker
+    notifications/bark.ts   # Bark summary/alert dispatch
     reports/daily.ts        # markdown daily report
     cli.ts                  # commander (collect|analyze|report|run|cron)
     index.ts                # entry
@@ -165,13 +242,11 @@ histogram sign agrees; lower when they conflict. Clamped to 0..1.
 `reports/YYYY-MM-DD.md` contains, in this exact order:
 
 1. `# Daily Summary — YYYY-MM-DD`
-2. `## BTC`
-3. `## CKB`
-4. `## Gold` (XAUTUSDT primary, plus XAUUSDT if available)
-5. `## Cross Market`
-6. `## Changes Since Yesterday` (diffs vs the most-recent stored
+2. One `## SYMBOL` section per configured market
+3. `## Cross Market`
+4. `## Changes Since Yesterday` (diffs vs the most-recent stored
    observation from the prior UTC day)
-7. `## Things Worth Watching` (descriptive only — no predictions)
+5. `## Things Worth Watching` (descriptive only — no predictions)
 
 The same content is also stored in the `reports` table (upsert by date).
 

@@ -4,6 +4,8 @@ import { makeLogger } from "./logger.js";
 import { runCollect } from "./collectors/collect.js";
 import { runAnalyze } from "./agents/observer.js";
 import { buildDailyReport } from "./reports/daily.js";
+import { sendBarkMarketSummary } from "./notifications/bark.js";
+import { runDaemon } from "./daemon/worker.js";
 import cron from "node-cron";
 import type { Market } from "./types.js";
 import { closeDb } from "./storage/db.js";
@@ -14,6 +16,16 @@ function parseMarkets(input: string | undefined): Market[] | undefined {
     .split(",")
     .map((s) => s.trim().toUpperCase())
     .filter((s) => s.length > 0) as Market[];
+}
+
+function addLogLevelOption(command: Command): Command {
+  return command.option("--log-level <level>", "override LOG_LEVEL (error|warn|info|debug)");
+}
+
+function addMarketOption(command: Command): Command {
+  return addLogLevelOption(
+    command.option("-m, --market <list>", "comma-separated market filter (e.g. BTCUSDT,XAUTUSDT)"),
+  );
 }
 
 export function buildProgram(): Command {
@@ -28,8 +40,7 @@ export function buildProgram(): Command {
     .option("-m, --market <list>", "comma-separated market filter (e.g. BTCUSDT,XAUTUSDT)")
     .option("--log-level <level>", "override LOG_LEVEL (error|warn|info|debug)");
 
-  program
-    .command("collect")
+  addMarketOption(program.command("collect"))
     .description("Fetch latest candles for all markets/intervals and store in SQLite")
     .action(async (opts: { market?: string; logLevel?: string }) => {
       const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
@@ -53,8 +64,7 @@ export function buildProgram(): Command {
       }
     });
 
-  program
-    .command("analyze")
+  addMarketOption(program.command("analyze"))
     .description("Compute indicators and emit one observation per (market, interval)")
     .action(async (opts: { market?: string; logLevel?: string }) => {
       const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
@@ -73,8 +83,7 @@ export function buildProgram(): Command {
       }
     });
 
-  program
-    .command("report")
+  addLogLevelOption(program.command("report"))
     .description("Generate today's daily markdown report")
     .action((opts: { logLevel?: string }) => {
       const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
@@ -90,10 +99,40 @@ export function buildProgram(): Command {
       }
     });
 
-  program
-    .command("run")
+  addLogLevelOption(program.command("notify"))
+    .description("Send the latest market summary through Bark")
+    .action(async (opts: { logLevel?: string }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        const res = await sendBarkMarketSummary({ logger: log });
+        log.info(`notify: ${res.title}`);
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        log.error("notify failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("daemon"))
+    .description("Run the long-lived collector → observer → alert worker")
+    .option("--notify", "push newly created alerts through Bark")
+    .action(async (opts: { logLevel?: string; notify?: boolean }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        await runDaemon({ logger: log, notify: opts.notify === true });
+      } catch (e) {
+        log.error("daemon failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addMarketOption(program.command("run"))
     .description("Run collect → analyze → report in one shot")
-    .action(async (opts: { market?: string; logLevel?: string }) => {
+    .option("--notify", "send a Bark market summary after report generation")
+    .action(async (opts: { market?: string; logLevel?: string; notify?: boolean }) => {
       const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
       const markets = parseMarkets(opts.market);
       try {
@@ -106,6 +145,10 @@ export function buildProgram(): Command {
         log.info("=== run: report ===");
         const r = buildDailyReport({ logger: log });
         log.info(`report: ${r.path}`);
+        if (opts.notify === true) {
+          log.info("=== run: notify ===");
+          await sendBarkMarketSummary({ logger: log });
+        }
         closeDb();
         process.exit(0);
       } catch (e) {
@@ -115,10 +158,10 @@ export function buildProgram(): Command {
       }
     });
 
-  program
-    .command("cron")
+  addLogLevelOption(program.command("cron"))
     .description("Start in-process scheduler: collect every 5m, analyze every 15m, report hourly at :05")
-    .action((opts: { logLevel?: string }) => {
+    .option("--notify", "send a Bark market summary after each scheduled report")
+    .action((opts: { logLevel?: string; notify?: boolean }) => {
       const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
       log.info("starting cron scheduler");
       // Every 5 minutes: collect
@@ -136,6 +179,9 @@ export function buildProgram(): Command {
         log.info("[cron] report tick");
         try {
           buildDailyReport({ logger: log });
+          if (opts.notify === true) {
+            sendBarkMarketSummary({ logger: log }).catch((e) => log.error("[cron] notify failed", e));
+          }
         } catch (e) {
           log.error("[cron] report failed", e);
         }
@@ -144,6 +190,7 @@ export function buildProgram(): Command {
       log.info("  collect  */5 * * * *");
       log.info("  analyze  */15 * * * *");
       log.info("  report   5 * * * *");
+      if (opts.notify === true) log.info("  notify   after report");
       log.info("press Ctrl+C to stop.");
       // Keep the process alive.
       process.stdin.resume();
