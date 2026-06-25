@@ -27,6 +27,7 @@ export class Repository {
   private readonly allLatestObservationsStmt: Database.Statement;
   private readonly hasObservationStmt: Database.Statement;
   private readonly insertAlertEventStmt: Database.Statement;
+  private readonly alertEventsStmt: Database.Statement;
   private readonly unsentAlertEventsStmt: Database.Statement;
   private readonly markAlertEventSentStmt: Database.Statement;
 
@@ -143,6 +144,12 @@ export class Repository {
       `INSERT OR IGNORE INTO alert_events
          (market, interval, ts, type, severity, fingerprint, title, body, data_json, sent_at)
        VALUES (@market, @interval, @ts, @type, @severity, @fingerprint, @title, @body, @dataJson, @sentAt)`,
+    );
+    this.alertEventsStmt = db.prepare(
+      `SELECT id, market, interval, ts, type, severity, fingerprint, title, body, data_json, sent_at
+         FROM alert_events
+        ORDER BY ts DESC, id DESC
+        LIMIT ?`,
     );
     this.unsentAlertEventsStmt = db.prepare(
       `SELECT id, market, interval, ts, type, severity, fingerprint, title, body, data_json, sent_at
@@ -469,7 +476,27 @@ export class Repository {
   }
 
   queryUnsentAlertEvents(limit: number): AlertEvent[] {
-    const rows = this.unsentAlertEventsStmt.all(limit) as Array<{
+    const rows = this.unsentAlertEventsStmt.all(limit) as AlertEventRow[];
+    return rows.map(alertEventFromRow);
+  }
+
+  queryAlertEvents(limit: number): AlertEvent[] {
+    const rows = this.alertEventsStmt.all(limit) as AlertEventRow[];
+    return rows.map(alertEventFromRow);
+  }
+
+  countAlertEvents(): { total: number; unsent: number } {
+    const total = this.db.prepare(`SELECT COUNT(*) AS n FROM alert_events`).get() as { n: number };
+    const unsent = this.db.prepare(`SELECT COUNT(*) AS n FROM alert_events WHERE sent_at IS NULL`).get() as { n: number };
+    return { total: total.n, unsent: unsent.n };
+  }
+
+  markAlertEventSent(id: number, sentAt: number): void {
+    this.markAlertEventSentStmt.run(sentAt, id);
+  }
+}
+
+type AlertEventRow = {
       id: number;
       market: string;
       interval: string;
@@ -481,23 +508,20 @@ export class Repository {
       body: string;
       data_json: string;
       sent_at: number | null;
-    }>;
-    return rows.map((r) => ({
-      id: r.id,
-      market: r.market as Market,
-      interval: r.interval as Interval,
-      ts: r.ts,
-      type: r.type,
-      severity: r.severity,
-      fingerprint: r.fingerprint,
-      title: r.title,
-      body: r.body,
-      dataJson: r.data_json,
-      sentAt: r.sent_at,
-    }));
-  }
+};
 
-  markAlertEventSent(id: number, sentAt: number): void {
-    this.markAlertEventSentStmt.run(sentAt, id);
-  }
+function alertEventFromRow(r: AlertEventRow): AlertEvent {
+  return {
+    id: r.id,
+    market: r.market as Market,
+    interval: r.interval as Interval,
+    ts: r.ts,
+    type: r.type,
+    severity: r.severity,
+    fingerprint: r.fingerprint,
+    title: r.title,
+    body: r.body,
+    dataJson: r.data_json,
+    sentAt: r.sent_at,
+  };
 }

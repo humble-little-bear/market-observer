@@ -79,6 +79,8 @@ node dist/cli.js analyze   # compute indicators + emit observations
 node dist/cli.js report    # render reports/YYYY-MM-DD.md
 node dist/cli.js notify    # send latest 4h summary to Bark
 node dist/cli.js daemon    # long-lived collector → observer → alert worker
+node dist/cli.js status    # inspect DB freshness and latest observations
+node dist/cli.js alerts    # list recent alert events
 node dist/cli.js cron      # start the in-process scheduler (Ctrl+C to stop)
 
 # Optional market filter
@@ -91,6 +93,11 @@ node dist/cli.js cron --notify
 # Recommended server mode: record continuously, push only alert events
 node dist/cli.js daemon
 node dist/cli.js daemon --notify
+
+# Operational checks
+node dist/cli.js status
+node dist/cli.js alerts --limit 20
+node dist/cli.js alerts --unsent
 ```
 
 After a `run`, check `data/observer.db` (SQLite) and `reports/YYYY-MM-DD.md`
@@ -132,6 +139,59 @@ First-pass alert rules:
 - Volatility upgrades into `elevated` or `high`.
 - 1h and 4h trend alignment when both are non-ranging.
 
+## Server deployment
+
+Use `daemon` as the long-running process. Start without `--notify` for the
+first 24-48 hours if you want to inspect `alert_events` before Bark pushes are
+enabled.
+
+Example `.env` for a server:
+
+```bash
+DB_PATH=/opt/market-observer/data/observer.db
+LOG_LEVEL=info
+MARKETS=BTCUSDT,ETHUSDT,SOLUSDT,XAUTUSDT
+INTERVALS=15m,1h,4h,1d
+COLLECT_MIN_REQUEST_INTERVAL_MS=1200
+BARK_BASE_URL=https://bark.example.com
+BARK_DEVICE_KEY=your-device-key
+BARK_GROUP=market-observer
+BARK_LEVEL=active
+```
+
+Systemd unit example:
+
+```ini
+[Unit]
+Description=Market Observer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/market-observer
+EnvironmentFile=/opt/market-observer/.env
+ExecStart=/usr/bin/env node dist/cli.js daemon
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Switch `ExecStart` to `node dist/cli.js daemon --notify` after the alert stream
+looks useful.
+
+Useful checks:
+
+```bash
+systemctl status market-observer
+journalctl -u market-observer -n 100 --no-pager
+node dist/cli.js status
+node dist/cli.js alerts --limit 20
+node dist/cli.js alerts --unsent
+```
+
 The Bark body is intentionally short for watch display:
 
 ```text
@@ -163,6 +223,7 @@ market-observer/
     agents/observer.ts      # latest indicators → structured Observation
     alerts/rules.ts         # observation/candle rules → deduplicated alert events
     daemon/worker.ts        # long-lived paced worker
+    inspect/status.ts       # operational status/alerts rendering
     notifications/bark.ts   # Bark summary/alert dispatch
     reports/daily.ts        # markdown daily report
     cli.ts                  # commander (collect|analyze|report|run|cron)

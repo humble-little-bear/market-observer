@@ -6,6 +6,7 @@ import { runAnalyze } from "./agents/observer.js";
 import { buildDailyReport } from "./reports/daily.js";
 import { sendBarkMarketSummary } from "./notifications/bark.js";
 import { runDaemon } from "./daemon/worker.js";
+import { renderAlerts, renderStatus } from "./inspect/status.js";
 import cron from "node-cron";
 import type { Market } from "./types.js";
 import { closeDb } from "./storage/db.js";
@@ -129,6 +130,39 @@ export function buildProgram(): Command {
       }
     });
 
+  program
+    .command("status")
+    .description("Show database freshness, latest observations, and alert counts")
+    .action(() => {
+      try {
+        console.log(renderStatus());
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        logger.error("status failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("alerts")
+    .description("List recent alert events")
+    .option("-n, --limit <n>", "number of alerts to show", "20")
+    .option("--unsent", "show only unsent alerts")
+    .action((opts: { limit?: string; unsent?: boolean }) => {
+      try {
+        const limit = parsePositiveInt(opts.limit ?? "20", "limit");
+        console.log(renderAlerts({ limit, unsentOnly: opts.unsent === true }));
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        logger.error("alerts failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
   addMarketOption(program.command("run"))
     .description("Run collect → analyze → report in one shot")
     .option("--notify", "send a Bark market summary after report generation")
@@ -209,6 +243,14 @@ export function buildProgram(): Command {
 function asLogLevel(s: string): "error" | "warn" | "info" | "debug" {
   if (s === "error" || s === "warn" || s === "info" || s === "debug") return s;
   throw new Error(`invalid log level: ${s}`);
+}
+
+function parsePositiveInt(input: string, label: string): number {
+  const n = Number(input);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return n;
 }
 
 export async function main(argv: readonly string[]): Promise<void> {
