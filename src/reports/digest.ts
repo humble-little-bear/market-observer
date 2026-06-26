@@ -120,7 +120,7 @@ export async function runDigest(opts: DigestOptions = {}): Promise<{ created: bo
   const repo = new Repository(db);
   const existing = repo.queryDigestRun(digest.periodStart, digest.periodEnd);
   if (existing && !opts.force && (existing.sentAt !== null || opts.notify !== true)) {
-    return { created: false, sent: existing.sentAt !== null, digest: existing };
+    return { created: false, sent: false, digest: existing };
   }
 
   const created = existing ? false : repo.insertDigestRun(digest);
