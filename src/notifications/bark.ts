@@ -106,6 +106,7 @@ function parseAlertData(event: AlertEvent): AlertData {
 function buildChineseAlertMessage(event: AlertEvent): { title: string; body: string } {
   const data = parseAlertData(event);
   const close = numberFromData(data, "close");
+  const closeText = close === null ? "" : `收盘 ${close}；`;
 
   switch (event.type) {
     case "trend_change": {
@@ -115,7 +116,7 @@ function buildChineseAlertMessage(event: AlertEvent): { title: string; body: str
       const confidenceText = confidence === null ? "" : `，置信度 ${(confidence * 100).toFixed(0)}%`;
       return {
         title: `${event.market} ${event.interval} 趋势变化`,
-        body: `${previousTrend} -> ${trend}${close === null ? "" : `，收盘 ${close}`}${confidenceText}`,
+        body: `${closeText}趋势 ${previousTrend} -> ${trend}${confidenceText}`,
       };
     }
     case "volatility_upgrade": {
@@ -123,7 +124,7 @@ function buildChineseAlertMessage(event: AlertEvent): { title: string; body: str
       const volatility = volatilityZh(data.volatility);
       return {
         title: `${event.market} ${event.interval} 波动升高`,
-        body: `${previousVolatility} -> ${volatility}，趋势 ${trendZh(data.trend)}${close === null ? "" : `，收盘 ${close}`}`,
+        body: `${closeText}波动 ${previousVolatility} -> ${volatility}，趋势 ${trendZh(data.trend)}`,
       };
     }
     case "sharp_move": {
@@ -134,13 +135,18 @@ function buildChineseAlertMessage(event: AlertEvent): { title: string; body: str
       const thresholdText = thresholdPct === null ? "" : `，阈值 ${thresholdPct}%`;
       return {
         title: `${event.market} ${event.interval} ${direction}`,
-        body: `${event.interval} ${changeText}${close === null ? "" : `，收盘 ${close}`}${thresholdText}`,
+        body: `${closeText}${event.interval} ${changeText}${thresholdText}`,
       };
     }
     case "multi_timeframe_alignment": {
+      const oneHourClose = numberFromData(data, "oneHourClose");
+      const fourHourClose = numberFromData(data, "fourHourClose");
+      const priceText = oneHourClose === null && fourHourClose === null
+        ? ""
+        : `1h收盘 ${oneHourClose ?? "未知"}，4h收盘 ${fourHourClose ?? "未知"}；`;
       return {
         title: `${event.market} 1h/4h 同向`,
-        body: `1h 和 4h 同为${trendZh(data.trend)}，值得留意`,
+        body: `${priceText}1h 和 4h 同为${trendZh(data.trend)}，值得留意`,
       };
     }
   }

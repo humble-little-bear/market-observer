@@ -125,6 +125,16 @@ function multiTimeframeAlignmentAlert(repo: Repository, market: Market): AlertEv
   if (!oneHour || !fourHour) return null;
   if (oneHour.trend === "ranging" || oneHour.trend !== fourHour.trend) return null;
 
+  const previousOneHour = repo.queryLatestObservationBeforeTs(market, "1h", oneHour.ts);
+  const previousFourHour = repo.queryLatestObservationBeforeTs(market, "4h", fourHour.ts);
+  const wasAlreadyAligned =
+    previousOneHour !== null &&
+    previousFourHour !== null &&
+    previousOneHour.trend === oneHour.trend &&
+    previousFourHour.trend === fourHour.trend &&
+    previousOneHour.trend === previousFourHour.trend;
+  if (wasAlreadyAligned) return null;
+
   const ts = Math.max(oneHour.ts, fourHour.ts);
   return mkAlert({
     market,
@@ -135,7 +145,13 @@ function multiTimeframeAlignmentAlert(repo: Repository, market: Market): AlertEv
     fingerprint: `${market}:mtf:1h+4h:${oneHour.trend}:${oneHour.ts}:${fourHour.ts}`,
     title: `${market} 1h/4h aligned`,
     body: `1h and 4h are both ${oneHour.trend}. 1h close ${oneHour.close}; 4h close ${fourHour.close}.`,
-    data: { trend: oneHour.trend, oneHourTs: oneHour.ts, fourHourTs: fourHour.ts },
+    data: {
+      trend: oneHour.trend,
+      oneHourTs: oneHour.ts,
+      fourHourTs: fourHour.ts,
+      oneHourClose: oneHour.close,
+      fourHourClose: fourHour.close,
+    },
   });
 }
 
