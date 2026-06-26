@@ -23,6 +23,10 @@ const EnvSchema = z.object({
   ALERT_SHARP_MOVE_1H_PCT: z.coerce.number().positive().default(3),
   ALERT_AGGREGATION_WINDOW_MS: z.coerce.number().int().positive().default(180_000),
   DIGEST_INTERVAL_HOURS: z.coerce.number().int().positive().default(6),
+  STRUCTURE_MARKETS: z.string().optional(),
+  STRUCTURE_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+  STRUCTURE_DEPTH_LIMIT: z.coerce.number().int().positive().default(100),
+  STRUCTURE_SLIPPAGE_NOTIONAL: z.coerce.number().positive().default(10_000),
   BARK_BASE_URL: z.preprocess(optionalString, z.string().url().optional()),
   BARK_DEVICE_KEY: z.preprocess(optionalString, z.string().min(1).optional()),
   BARK_GROUP: z.string().default("market-observer"),
@@ -46,6 +50,12 @@ export type AppConfig = {
     aggregationWindowMs: number;
   };
   digestIntervalHours: number;
+  structure: {
+    markets: readonly Market[];
+    intervalMs: number;
+    depthLimit: number;
+    slippageNotional: number;
+  };
   markets: readonly Market[];
   intervals: readonly Interval[];
   dataDir: string;
@@ -90,6 +100,10 @@ function buildConfig(): AppConfig {
     ALERT_SHARP_MOVE_1H_PCT: merged.ALERT_SHARP_MOVE_1H_PCT,
     ALERT_AGGREGATION_WINDOW_MS: merged.ALERT_AGGREGATION_WINDOW_MS,
     DIGEST_INTERVAL_HOURS: merged.DIGEST_INTERVAL_HOURS,
+    STRUCTURE_MARKETS: merged.STRUCTURE_MARKETS,
+    STRUCTURE_INTERVAL_MS: merged.STRUCTURE_INTERVAL_MS,
+    STRUCTURE_DEPTH_LIMIT: merged.STRUCTURE_DEPTH_LIMIT,
+    STRUCTURE_SLIPPAGE_NOTIONAL: merged.STRUCTURE_SLIPPAGE_NOTIONAL,
     BARK_BASE_URL: merged.BARK_BASE_URL,
     BARK_DEVICE_KEY: merged.BARK_DEVICE_KEY,
     BARK_GROUP: merged.BARK_GROUP,
@@ -99,7 +113,12 @@ function buildConfig(): AppConfig {
   const dataDir = path.resolve(path.dirname(parsed.DB_PATH));
   const reportsDir = path.resolve("./reports");
   const markets = parseMarkets(parsed.MARKETS);
+  const structureMarkets = parseStructureMarkets(parsed.STRUCTURE_MARKETS, markets);
   const intervals = parseIntervals(parsed.INTERVALS);
+
+  if (![20, 50, 100, 500, 1000].includes(parsed.STRUCTURE_DEPTH_LIMIT)) {
+    throw new Error("STRUCTURE_DEPTH_LIMIT must be one of: 20,50,100,500,1000");
+  }
 
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(reportsDir, { recursive: true });
@@ -121,11 +140,28 @@ function buildConfig(): AppConfig {
       aggregationWindowMs: parsed.ALERT_AGGREGATION_WINDOW_MS,
     },
     digestIntervalHours: parsed.DIGEST_INTERVAL_HOURS,
+    structure: {
+      markets: structureMarkets,
+      intervalMs: parsed.STRUCTURE_INTERVAL_MS,
+      depthLimit: parsed.STRUCTURE_DEPTH_LIMIT,
+      slippageNotional: parsed.STRUCTURE_SLIPPAGE_NOTIONAL,
+    },
     markets,
     intervals,
     dataDir,
     reportsDir,
   };
+}
+
+function parseStructureMarkets(
+  input: string | undefined,
+  observedMarkets: readonly Market[],
+): readonly Market[] {
+  if (input !== undefined && input.trim() !== "") return parseMarkets(input);
+
+  const liquidDefaults = new Set(["BTCUSDT", "ETHUSDT", "SOLUSDT"]);
+  const picked = observedMarkets.filter((market) => liquidDefaults.has(market));
+  return picked.length > 0 ? picked : observedMarkets.slice(0, 3);
 }
 
 export const config: AppConfig = buildConfig();

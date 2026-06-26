@@ -4,7 +4,8 @@ A local-first, **read-only** cryptocurrency & gold market observation
 system. It fetches public market data from Binance (no API keys, no
 account access), stores candles in SQLite, computes a panel of technical
 indicators (EMA20, EMA60, ATR14, RSI14, MACD 12/26/9), emits structured
-non-predictive observations, and writes a daily markdown report.
+non-predictive observations, samples market-structure metrics, and writes
+markdown reports.
 
 **No trades. No withdrawals. No account mutation. GET-only public market
 data.** See [SAFETY.md](./SAFETY.md) for the full invariant.
@@ -62,6 +63,10 @@ optional). All three have safe public defaults:
 | `ALERT_SHARP_MOVE_1H_PCT` | `3`                 | 1h sharp-move alert threshold |
 | `ALERT_AGGREGATION_WINDOW_MS` | `180000`        | group similar pending alerts into one Bark push |
 | `DIGEST_INTERVAL_HOURS` | `6`                    | Bark digest period in hours |
+| `STRUCTURE_MARKETS` | liquid subset of `MARKETS` | symbols for depth/OI/funding sampling |
+| `STRUCTURE_INTERVAL_MS` | `300000`              | market-structure sampling interval |
+| `STRUCTURE_DEPTH_LIMIT` | `100`                 | order book depth limit (`20,50,100,500,1000`) |
+| `STRUCTURE_SLIPPAGE_NOTIONAL` | `10000`         | quote notional used for slippage estimate |
 | `BARK_BASE_URL`   | unset                         | optional Bark server URL      |
 | `BARK_DEVICE_KEY` | unset                         | optional Bark iOS device key  |
 | `BARK_GROUP`      | `market-observer`             | Bark notification group       |
@@ -77,6 +82,7 @@ node dist/cli.js run
 
 # Step-by-step
 node dist/cli.js collect   # fetch latest candles for all markets/intervals
+node dist/cli.js collect-structure # fetch depth/OI/funding metrics
 node dist/cli.js analyze   # compute indicators + emit observations
 node dist/cli.js report    # render reports/YYYY-MM-DD.md
 node dist/cli.js notify    # send latest 4h summary to Bark
@@ -216,7 +222,29 @@ node dist/cli.js alerts --limit 20
 node dist/cli.js alerts --unsent
 node dist/cli.js dispatch-alerts
 node dist/cli.js digest
+node dist/cli.js collect-structure
 ```
+
+## Market structure
+
+The daemon also samples a low-frequency market-structure panel for the symbols
+in `STRUCTURE_MARKETS`:
+
+- Spot and USDT-M futures order book snapshots.
+- Best bid/ask, mid price, spread in bps.
+- Quote depth within 25bps and 50bps of mid.
+- 25bps order book imbalance.
+- Estimated buy/sell slippage for `STRUCTURE_SLIPPAGE_NOTIONAL`.
+- Futures open interest, latest funding rate, and futures-vs-spot basis.
+
+These rows are stored in SQLite table `market_metrics`. The first version uses
+REST snapshots every five minutes by default; this is intentionally calmer than
+a WebSocket order book and stays well below Binance public-data rate limits.
+`status` shows the latest structure row, and the 6-hour digest includes a short
+liquidity/futures line when data is available.
+
+See [docs/market-structure.md](./docs/market-structure.md) for the methodology,
+field definitions, and how to interpret these metrics.
 
 The Bark body is intentionally short for watch display:
 
@@ -240,6 +268,7 @@ market-observer/
     collectors/
       binance.ts            # fetchKlines with safety guard + retry + timeout
       collect.ts            # backfill-on-first-run + poll-latest orchestration
+      structure.ts          # low-frequency depth/OI/funding sampling
     indicators/
       ema.ts                # standard EMA
       atr.ts                # Wilder ATR(14) + atr_pct = atr/close*100

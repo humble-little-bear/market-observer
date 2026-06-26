@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { config } from "./config/index.js";
 import { makeLogger } from "./logger.js";
 import { runCollect } from "./collectors/collect.js";
+import { runCollectStructure } from "./collectors/structure.js";
 import { runAnalyze } from "./agents/observer.js";
 import { buildDailyReport } from "./reports/daily.js";
 import { buildDigestRun, runDigest } from "./reports/digest.js";
@@ -61,6 +62,26 @@ export function buildProgram(): Command {
         process.exit(0);
       } catch (e) {
         log.error("collect failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addMarketOption(program.command("collect-structure"))
+    .description("Fetch spot/futures depth, futures open interest, and funding into SQLite")
+    .action(async (opts: { market?: string; logLevel?: string }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      const markets = parseMarkets(opts.market);
+      try {
+        const res = await runCollectStructure({ markets, logger: log });
+        log.info(
+          `collect-structure: markets=${res.markets} metrics=${res.metricsUpserted} failed=${res.failed.length}`,
+        );
+        for (const f of res.failed) log.warn(`failed: ${f.market} — ${f.reason}`);
+        closeDb();
+        process.exit(res.failed.length === res.markets ? 1 : 0);
+      } catch (e) {
+        log.error("collect-structure failed", e);
         closeDb();
         process.exit(1);
       }
