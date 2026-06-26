@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import type {
   AlertEvent,
   Candle,
+  DigestRun,
   Indicator,
   Interval,
   Market,
@@ -29,7 +30,11 @@ export class Repository {
   private readonly insertAlertEventStmt: Database.Statement;
   private readonly alertEventsStmt: Database.Statement;
   private readonly unsentAlertEventsStmt: Database.Statement;
+  private readonly alertEventsBetweenStmt: Database.Statement;
   private readonly markAlertEventSentStmt: Database.Statement;
+  private readonly insertDigestRunStmt: Database.Statement;
+  private readonly digestRunByPeriodStmt: Database.Statement;
+  private readonly markDigestRunSentStmt: Database.Statement;
 
   constructor(db: Database.Database) {
     this.db = db;
@@ -158,8 +163,28 @@ export class Repository {
         ORDER BY ts ASC, id ASC
         LIMIT ?`,
     );
+    this.alertEventsBetweenStmt = db.prepare(
+      `SELECT id, market, interval, ts, type, severity, fingerprint, title, body, data_json, sent_at
+         FROM alert_events
+        WHERE ts >= ? AND ts < ?
+        ORDER BY ts ASC, id ASC`,
+    );
     this.markAlertEventSentStmt = db.prepare(
       `UPDATE alert_events SET sent_at = ? WHERE id = ?`,
+    );
+    this.insertDigestRunStmt = db.prepare(
+      `INSERT OR IGNORE INTO digest_runs
+         (period_start, period_end, title, body, sent_at)
+       VALUES (@periodStart, @periodEnd, @title, @body, @sentAt)`,
+    );
+    this.digestRunByPeriodStmt = db.prepare(
+      `SELECT id, period_start, period_end, title, body, sent_at
+         FROM digest_runs
+        WHERE period_start = ? AND period_end = ?
+        LIMIT 1`,
+    );
+    this.markDigestRunSentStmt = db.prepare(
+      `UPDATE digest_runs SET sent_at = ? WHERE id = ?`,
     );
   }
 
@@ -485,6 +510,11 @@ export class Repository {
     return rows.map(alertEventFromRow);
   }
 
+  queryAlertEventsBetween(startTs: number, endTs: number): AlertEvent[] {
+    const rows = this.alertEventsBetweenStmt.all(startTs, endTs) as AlertEventRow[];
+    return rows.map(alertEventFromRow);
+  }
+
   countAlertEvents(): { total: number; unsent: number } {
     const total = this.db.prepare(`SELECT COUNT(*) AS n FROM alert_events`).get() as { n: number };
     const unsent = this.db.prepare(`SELECT COUNT(*) AS n FROM alert_events WHERE sent_at IS NULL`).get() as { n: number };
@@ -493,6 +523,43 @@ export class Repository {
 
   markAlertEventSent(id: number, sentAt: number): void {
     this.markAlertEventSentStmt.run(sentAt, id);
+  }
+
+  insertDigestRun(run: DigestRun): boolean {
+    const info = this.insertDigestRunStmt.run({
+      periodStart: run.periodStart,
+      periodEnd: run.periodEnd,
+      title: run.title,
+      body: run.body,
+      sentAt: run.sentAt,
+    });
+    return info.changes > 0;
+  }
+
+  queryDigestRun(periodStart: number, periodEnd: number): DigestRun | null {
+    const row = this.digestRunByPeriodStmt.get(periodStart, periodEnd) as
+      | {
+          id: number;
+          period_start: number;
+          period_end: number;
+          title: string;
+          body: string;
+          sent_at: number | null;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      periodStart: row.period_start,
+      periodEnd: row.period_end,
+      title: row.title,
+      body: row.body,
+      sentAt: row.sent_at,
+    };
+  }
+
+  markDigestRunSent(id: number, sentAt: number): void {
+    this.markDigestRunSentStmt.run(sentAt, id);
   }
 }
 

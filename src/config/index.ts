@@ -21,6 +21,8 @@ const EnvSchema = z.object({
   COLLECT_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().positive().default(1200),
   ALERT_SHARP_MOVE_15M_PCT: z.coerce.number().positive().default(1.5),
   ALERT_SHARP_MOVE_1H_PCT: z.coerce.number().positive().default(3),
+  ALERT_AGGREGATION_WINDOW_MS: z.coerce.number().int().positive().default(180_000),
+  DIGEST_INTERVAL_HOURS: z.coerce.number().int().positive().default(6),
   BARK_BASE_URL: z.preprocess(optionalString, z.string().url().optional()),
   BARK_DEVICE_KEY: z.preprocess(optionalString, z.string().min(1).optional()),
   BARK_GROUP: z.string().default("market-observer"),
@@ -41,7 +43,9 @@ export type AppConfig = {
   alerts: {
     sharpMove15mPct: number;
     sharpMove1hPct: number;
+    aggregationWindowMs: number;
   };
+  digestIntervalHours: number;
   markets: readonly Market[];
   intervals: readonly Interval[];
   dataDir: string;
@@ -84,6 +88,8 @@ function buildConfig(): AppConfig {
     COLLECT_MIN_REQUEST_INTERVAL_MS: merged.COLLECT_MIN_REQUEST_INTERVAL_MS,
     ALERT_SHARP_MOVE_15M_PCT: merged.ALERT_SHARP_MOVE_15M_PCT,
     ALERT_SHARP_MOVE_1H_PCT: merged.ALERT_SHARP_MOVE_1H_PCT,
+    ALERT_AGGREGATION_WINDOW_MS: merged.ALERT_AGGREGATION_WINDOW_MS,
+    DIGEST_INTERVAL_HOURS: merged.DIGEST_INTERVAL_HOURS,
     BARK_BASE_URL: merged.BARK_BASE_URL,
     BARK_DEVICE_KEY: merged.BARK_DEVICE_KEY,
     BARK_GROUP: merged.BARK_GROUP,
@@ -112,7 +118,9 @@ function buildConfig(): AppConfig {
     alerts: {
       sharpMove15mPct: parsed.ALERT_SHARP_MOVE_15M_PCT,
       sharpMove1hPct: parsed.ALERT_SHARP_MOVE_1H_PCT,
+      aggregationWindowMs: parsed.ALERT_AGGREGATION_WINDOW_MS,
     },
+    digestIntervalHours: parsed.DIGEST_INTERVAL_HOURS,
     markets,
     intervals,
     dataDir,

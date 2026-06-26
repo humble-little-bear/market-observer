@@ -60,6 +60,8 @@ optional). All three have safe public defaults:
 | `COLLECT_MIN_REQUEST_INTERVAL_MS` | `1200`        | daemon-mode global request gap |
 | `ALERT_SHARP_MOVE_15M_PCT` | `1.5`              | 15m sharp-move alert threshold |
 | `ALERT_SHARP_MOVE_1H_PCT` | `3`                 | 1h sharp-move alert threshold |
+| `ALERT_AGGREGATION_WINDOW_MS` | `180000`        | group similar pending alerts into one Bark push |
+| `DIGEST_INTERVAL_HOURS` | `6`                    | Bark digest period in hours |
 | `BARK_BASE_URL`   | unset                         | optional Bark server URL      |
 | `BARK_DEVICE_KEY` | unset                         | optional Bark iOS device key  |
 | `BARK_GROUP`      | `market-observer`             | Bark notification group       |
@@ -79,6 +81,7 @@ node dist/cli.js analyze   # compute indicators + emit observations
 node dist/cli.js report    # render reports/YYYY-MM-DD.md
 node dist/cli.js notify    # send latest 4h summary to Bark
 node dist/cli.js dispatch-alerts # send pending unsent alerts to Bark
+node dist/cli.js digest    # render latest completed digest window
 node dist/cli.js daemon    # long-lived collector → observer → alert worker
 node dist/cli.js status    # inspect DB freshness and latest observations
 node dist/cli.js alerts    # list recent alert events
@@ -100,6 +103,8 @@ node dist/cli.js status
 node dist/cli.js alerts --limit 20
 node dist/cli.js alerts --unsent
 node dist/cli.js dispatch-alerts
+node dist/cli.js digest
+node dist/cli.js digest --notify
 ```
 
 After a `run`, check `data/observer.db` (SQLite) and `reports/YYYY-MM-DD.md`
@@ -134,10 +139,21 @@ at a time, enforces `COLLECT_MIN_REQUEST_INTERVAL_MS` between Binance requests,
 records observations, writes alert events, and only pushes newly created alerts
 when `--notify` is enabled. On startup, `daemon --notify` also attempts to send
 any pending unsent alerts left over from a previous run or temporary Bark
-failure. You can trigger the same catch-up manually with:
+failure. Similar pending alerts inside `ALERT_AGGREGATION_WINDOW_MS` are grouped
+into one Bark push, so BTC/ETH/SOL synchronized moves do not vibrate the watch
+three times. You can trigger pending alert catch-up manually with:
 
 ```bash
 node dist/cli.js dispatch-alerts
+```
+
+`daemon --notify` also sends a compact market digest every
+`DIGEST_INTERVAL_HOURS` hours. The default is a 6-hour digest. Render or send it
+manually with:
+
+```bash
+node dist/cli.js digest
+node dist/cli.js digest --notify
 ```
 
 First-pass alert rules:
@@ -199,6 +215,7 @@ node dist/cli.js status
 node dist/cli.js alerts --limit 20
 node dist/cli.js alerts --unsent
 node dist/cli.js dispatch-alerts
+node dist/cli.js digest
 ```
 
 The Bark body is intentionally short for watch display:
@@ -235,6 +252,7 @@ market-observer/
     inspect/status.ts       # operational status/alerts rendering
     notifications/bark.ts   # Bark summary/alert dispatch
     reports/daily.ts        # markdown daily report
+    reports/digest.ts       # 6h market digest generation/dispatch
     cli.ts                  # commander (collect|analyze|report|run|cron)
     index.ts                # entry
   data/                     # observer.db (gitignored)

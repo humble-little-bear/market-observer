@@ -4,6 +4,7 @@ import { makeLogger } from "./logger.js";
 import { runCollect } from "./collectors/collect.js";
 import { runAnalyze } from "./agents/observer.js";
 import { buildDailyReport } from "./reports/daily.js";
+import { buildDigestRun, runDigest } from "./reports/digest.js";
 import { dispatchPendingBarkAlerts, sendBarkMarketSummary } from "./notifications/bark.js";
 import { runDaemon } from "./daemon/worker.js";
 import { renderAlerts, renderStatus } from "./inspect/status.js";
@@ -127,6 +128,31 @@ export function buildProgram(): Command {
         process.exit(0);
       } catch (e) {
         log.error("dispatch-alerts failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("digest"))
+    .description("Render or send the latest completed market digest window")
+    .option("--notify", "send digest through Bark")
+    .option("--force", "send even if this digest window already exists")
+    .action(async (opts: { logLevel?: string; notify?: boolean; force?: boolean }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        if (opts.notify === true) {
+          const res = await runDigest({ logger: log, notify: true, force: opts.force === true });
+          log.info(`digest: created=${res.created} sent=${res.sent}`);
+          closeDb();
+          process.exit(0);
+        }
+        const digest = buildDigestRun({ logger: log });
+        console.log(`# ${digest.title}`);
+        console.log(digest.body);
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        log.error("digest failed", e);
         closeDb();
         process.exit(1);
       }

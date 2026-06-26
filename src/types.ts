@@ -75,3 +75,12 @@ export interface AlertEvent {
   dataJson: string;
   sentAt: number | null;
 }
+
+export interface DigestRun {
+  id?: number;
+  periodStart: number;
+  periodEnd: number;
+  title: string;
+  body: string;
+  sentAt: number | null;
+}

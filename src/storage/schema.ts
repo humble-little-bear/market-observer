@@ -90,4 +90,17 @@ export const DDL: readonly string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_alert_events_market_ts
      ON alert_events (market, ts DESC);`,
+
+  `CREATE TABLE IF NOT EXISTS digest_runs (
+     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+     period_start  INTEGER NOT NULL,
+     period_end    INTEGER NOT NULL,
+     title         TEXT    NOT NULL,
+     body          TEXT    NOT NULL,
+     sent_at       INTEGER,
+     UNIQUE(period_start, period_end)
+   );`,
+
+  `CREATE INDEX IF NOT EXISTS idx_digest_runs_period
+     ON digest_runs (period_start DESC, period_end DESC);`,
 ];

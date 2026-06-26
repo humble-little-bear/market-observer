@@ -4,6 +4,7 @@ import { runCollect } from "../collectors/collect.js";
 import { runAnalyze } from "../agents/observer.js";
 import { evaluateAlerts } from "../alerts/rules.js";
 import { dispatchPendingBarkAlerts } from "../notifications/bark.js";
+import { runDigest } from "../reports/digest.js";
 import { closeDb } from "../storage/db.js";
 import { nextClosedCandleDueMs } from "../intervals.js";
 import type { Interval, Market } from "../types.js";
@@ -102,6 +103,8 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   if (notify) {
     const pushed = await dispatchPendingBarkAlerts({ logger });
     logger.info(`[daemon] pushed pending alerts=${pushed.sent}`);
+    const digest = await runDigest({ logger, notify: true });
+    logger.info(`[daemon] digest sent=${digest.sent}`);
   }
 
   while (!stopping) {
@@ -117,6 +120,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
 
     try {
       await processTask(next, { logger, lastRequestAt, notify });
+      if (notify) {
+        const digest = await runDigest({ logger, notify: true });
+        if (digest.sent) logger.info("[daemon] digest sent=true");
+      }
     } catch (e) {
       logger.error(`[daemon] task failed ${next.market} ${next.interval}`, e);
       next.nextDueMs = Date.now() + 60_000;

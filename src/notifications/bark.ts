@@ -31,6 +31,11 @@ type BarkResponse = {
 
 type AlertData = Record<string, unknown>;
 
+type AlertMessage = {
+  title: string;
+  body: string;
+};
+
 function fmtPriceAdaptive(x: number): string {
   if (!Number.isFinite(x) || x === 0) return x.toString();
   const ax = Math.abs(x);
@@ -90,6 +95,36 @@ function numberFromData(data: AlertData, key: string): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function assetClass(market: Market): "crypto" | "gold" {
+  return market.startsWith("XAU") ? "gold" : "crypto";
+}
+
+function alertDirection(event: AlertEvent, data: AlertData): string {
+  switch (event.type) {
+    case "sharp_move": {
+      const changePct = numberFromData(data, "changePct");
+      return changePct === null || changePct >= 0 ? "up" : "down";
+    }
+    case "trend_change":
+      return String(data.trend ?? "");
+    case "volatility_upgrade":
+      return String(data.volatility ?? "");
+    case "multi_timeframe_alignment":
+      return String(data.trend ?? "");
+  }
+}
+
+function aggregationKey(event: AlertEvent): string {
+  const data = parseAlertData(event);
+  return [
+    assetClass(event.market),
+    event.type,
+    event.interval,
+    alertDirection(event, data),
+    event.severity,
+  ].join(":");
+}
+
 function parseAlertData(event: AlertEvent): AlertData {
   try {
     const parsed = JSON.parse(event.dataJson) as unknown;
@@ -103,7 +138,7 @@ function parseAlertData(event: AlertEvent): AlertData {
   return {};
 }
 
-function buildChineseAlertMessage(event: AlertEvent): { title: string; body: string } {
+function buildChineseAlertMessage(event: AlertEvent): AlertMessage {
   const data = parseAlertData(event);
   const close = numberFromData(data, "close");
   const closeText = close === null ? "" : `收盘 ${close}；`;
@@ -150,6 +185,84 @@ function buildChineseAlertMessage(event: AlertEvent): { title: string; body: str
       };
     }
   }
+}
+
+function severityRank(severity: AlertEvent["severity"]): number {
+  if (severity === "critical") return 2;
+  if (severity === "warn") return 1;
+  return 0;
+}
+
+function maxSeverity(events: readonly AlertEvent[]): AlertEvent["severity"] {
+  let out: AlertEvent["severity"] = "info";
+  for (const event of events) {
+    if (severityRank(event.severity) > severityRank(out)) out = event.severity;
+  }
+  return out;
+}
+
+function buildAggregatedAlertMessage(events: readonly AlertEvent[]): AlertMessage {
+  const first = events[0]!;
+  const firstData = parseAlertData(first);
+  const direction = alertDirection(first, firstData);
+  const directionZh = direction === "up"
+    ? "急涨"
+    : direction === "down"
+    ? "急跌"
+    : trendZh(direction);
+  const className = assetClass(first.market) === "gold" ? "黄金" : "加密市场";
+
+  const lines = events.map((event) => {
+    const data = parseAlertData(event);
+    const close = numberFromData(data, "close");
+    const changePct = numberFromData(data, "changePct");
+    const oneHourClose = numberFromData(data, "oneHourClose");
+    const fourHourClose = numberFromData(data, "fourHourClose");
+    if (event.type === "sharp_move" && changePct !== null) {
+      return `${event.market} ${close ?? "未知"} ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+    }
+    if (event.type === "multi_timeframe_alignment") {
+      return `${event.market} 1h ${oneHourClose ?? "未知"} / 4h ${fourHourClose ?? "未知"}`;
+    }
+    return `${event.market} ${close ?? "未知"} ${buildChineseAlertMessage(event).body}`;
+  });
+
+  switch (first.type) {
+    case "sharp_move":
+      return { title: `${className}同步${directionZh}`, body: lines.join("\n") };
+    case "multi_timeframe_alignment":
+      return { title: `${className}1h/4h同步${directionZh}`, body: lines.join("\n") };
+    case "trend_change":
+      return { title: `${className}趋势同步变化`, body: lines.join("\n") };
+    case "volatility_upgrade":
+      return { title: `${className}波动同步升高`, body: lines.join("\n") };
+  }
+}
+
+function groupPendingAlerts(events: readonly AlertEvent[]): AlertEvent[][] {
+  const groups: AlertEvent[][] = [];
+  const used = new Set<number>();
+  const windowMs = config.alerts.aggregationWindowMs;
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i]!;
+    if (event.id !== undefined && used.has(event.id)) continue;
+    const key = aggregationKey(event);
+    const group = [event];
+    if (event.id !== undefined) used.add(event.id);
+
+    for (let j = i + 1; j < events.length; j++) {
+      const candidate = events[j]!;
+      if (candidate.id !== undefined && used.has(candidate.id)) continue;
+      if (Math.abs(candidate.ts - event.ts) > windowMs) continue;
+      if (aggregationKey(candidate) !== key) continue;
+      group.push(candidate);
+      if (candidate.id !== undefined) used.add(candidate.id);
+    }
+    groups.push(group);
+  }
+
+  return groups;
 }
 
 function pickNotificationObservations(observations: readonly Observation[]): Observation[] {
@@ -212,6 +325,25 @@ async function postBark(payload: BarkPayload): Promise<void> {
   }
 }
 
+export async function sendBarkNotification(args: {
+  title: string;
+  body: string;
+  level?: BarkPayload["level"];
+  logger?: Logger;
+}): Promise<NotifyResult> {
+  const logger = args.logger ?? makeLogger(config.logLevel);
+  const bark = getBarkConfig();
+  await postBark({
+    device_key: bark.deviceKey,
+    title: args.title,
+    body: args.body,
+    group: bark.group,
+    level: args.level ?? bark.level,
+  });
+  logger.info(`bark: sent ${args.title}`);
+  return { sent: true, title: args.title, body: args.body };
+}
+
 export async function sendBarkMarketSummary(opts: NotifyOptions = {}): Promise<NotifyResult> {
   const logger = opts.logger ?? makeLogger(config.logLevel);
   const bark = getBarkConfig();
@@ -261,13 +393,35 @@ export async function dispatchPendingBarkAlerts(opts: NotifyOptions = {}): Promi
   const logger = opts.logger ?? makeLogger(config.logLevel);
   const db = getDb(config.dbPath);
   const repo = new Repository(db);
-  const events = repo.queryUnsentAlertEvents(10);
+  const events = repo.queryUnsentAlertEvents(50);
+  const groups = groupPendingAlerts(events);
   let sent = 0;
 
-  for (const event of events) {
-    if (event.id === undefined) continue;
-    await sendBarkAlert(event, { logger });
-    repo.markAlertEventSent(event.id, Date.now());
+  for (const group of groups) {
+    if (group.length === 0) continue;
+    if (group.length === 1) {
+      const event = group[0]!;
+      if (event.id === undefined) continue;
+      await sendBarkAlert(event, { logger });
+      repo.markAlertEventSent(event.id, Date.now());
+      sent++;
+      continue;
+    }
+
+    const bark = getBarkConfig();
+    const message = buildAggregatedAlertMessage(group);
+    await postBark({
+      device_key: bark.deviceKey,
+      title: message.title,
+      body: message.body,
+      group: bark.group,
+      level: barkLevelForSeverity(maxSeverity(group)),
+    });
+    const sentAt = Date.now();
+    for (const event of group) {
+      if (event.id !== undefined) repo.markAlertEventSent(event.id, sentAt);
+    }
+    logger.info(`bark: sent aggregated alerts count=${group.length}`);
     sent++;
   }
 
