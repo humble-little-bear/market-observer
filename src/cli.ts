@@ -8,6 +8,7 @@ import { buildDailyReport } from "./reports/daily.js";
 import { buildDigestRun, runDigest } from "./reports/digest.js";
 import { dispatchPendingBarkAlerts, sendBarkMarketSummary } from "./notifications/bark.js";
 import { runDaemon } from "./daemon/worker.js";
+import { runServe } from "./server/serve.js";
 import { renderAlerts, renderStatus } from "./inspect/status.js";
 import cron from "node-cron";
 import type { Market } from "./types.js";
@@ -188,6 +189,25 @@ export function buildProgram(): Command {
         await runDaemon({ logger: log, notify: opts.notify === true });
       } catch (e) {
         log.error("daemon failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("serve"))
+    .description("Serve the read-only API and dashboard")
+    .option("--host <host>", "host to bind", "127.0.0.1")
+    .option("--port <port>", "port to bind", "8787")
+    .action(async (opts: { logLevel?: string; host?: string; port?: string }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        await runServe({
+          logger: log,
+          host: opts.host ?? "127.0.0.1",
+          port: parsePositiveInt(opts.port ?? "8787", "port"),
+        });
+      } catch (e) {
+        log.error("serve failed", e);
         closeDb();
         process.exit(1);
       }

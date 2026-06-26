@@ -89,6 +89,7 @@ node dist/cli.js notify    # send latest 4h summary to Bark
 node dist/cli.js dispatch-alerts # send pending unsent alerts to Bark
 node dist/cli.js digest    # render latest completed digest window
 node dist/cli.js daemon    # long-lived collector → observer → alert worker
+node dist/cli.js serve     # read-only API + dashboard
 node dist/cli.js status    # inspect DB freshness and latest observations
 node dist/cli.js alerts    # list recent alert events
 node dist/cli.js cron      # start the in-process scheduler (Ctrl+C to stop)
@@ -111,6 +112,7 @@ node dist/cli.js alerts --unsent
 node dist/cli.js dispatch-alerts
 node dist/cli.js digest
 node dist/cli.js digest --notify
+node dist/cli.js serve --host 127.0.0.1 --port 8787
 ```
 
 After a `run`, check `data/observer.db` (SQLite) and `reports/YYYY-MM-DD.md`
@@ -227,6 +229,31 @@ node dist/cli.js digest
 node dist/cli.js collect-structure
 ```
 
+## Dashboard API
+
+`serve` starts a read-only HTTP API and a compact dashboard from the same CLI:
+
+```bash
+node dist/cli.js serve --host 127.0.0.1 --port 8787
+```
+
+Open `http://127.0.0.1:8787/` to view recent prices, structure labels, depth,
+futures metrics, observations, and alerts. API endpoints:
+
+```text
+GET /api/markets
+GET /api/status
+GET /api/candles?market=BTCUSDT&interval=15m&hours=24
+GET /api/structure?market=BTCUSDT&hours=24
+GET /api/observations?market=BTCUSDT&hours=24
+GET /api/alerts?market=BTCUSDT&hours=24
+GET /api/summary?market=BTCUSDT&interval=15m&hours=24
+```
+
+The service is intentionally GET-only and local-first. For server deployment,
+keep it bound to `127.0.0.1` and expose it through Cloudflare Tunnel or another
+authenticated reverse proxy.
+
 ## Market structure
 
 The daemon also samples a low-frequency market-structure panel for the symbols
@@ -286,6 +313,7 @@ market-observer/
     notifications/bark.ts   # Bark summary/alert dispatch
     reports/daily.ts        # markdown daily report
     reports/digest.ts       # 6h market digest generation/dispatch
+    server/serve.ts         # read-only API + dashboard server
     cli.ts                  # commander (collect|analyze|report|run|cron)
     index.ts                # entry
   data/                     # observer.db (gitignored)

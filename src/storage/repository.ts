@@ -22,8 +22,10 @@ export class Repository {
   private readonly setSymbolStatusStmt: Database.Statement;
   private readonly countCandlesStmt: Database.Statement;
   private readonly latestCandleStmt: Database.Statement;
+  private readonly candlesBetweenStmt: Database.Statement;
   private readonly latestIndicatorsStmt: Database.Statement;
   private readonly latestObservationStmt: Database.Statement;
+  private readonly observationsBetweenStmt: Database.Statement;
   private readonly observationByMarketDateStmt: Database.Statement;
   private readonly latestObservationBeforeTsStmt: Database.Statement;
   private readonly allLatestObservationsStmt: Database.Statement;
@@ -40,6 +42,7 @@ export class Repository {
   private readonly latestMarketMetricsStmt: Database.Statement;
   private readonly latestMarketMetricStmt: Database.Statement;
   private readonly marketMetricAtOrBeforeStmt: Database.Statement;
+  private readonly marketMetricsBetweenStmt: Database.Statement;
 
   constructor(db: Database.Database) {
     this.db = db;
@@ -106,6 +109,12 @@ export class Repository {
         ORDER BY open_time DESC
         LIMIT ?`,
     );
+    this.candlesBetweenStmt = db.prepare(
+      `SELECT market, interval, open_time, open, high, low, close, volume, close_time
+         FROM candles
+        WHERE market = ? AND interval = ? AND open_time >= ? AND open_time <= ?
+        ORDER BY open_time ASC`,
+    );
     this.latestIndicatorsStmt = db.prepare(
       `SELECT market, interval, open_time, ema20, ema60, atr, atr_pct, rsi, macd, macd_signal, macd_hist
          FROM indicators
@@ -119,6 +128,12 @@ export class Repository {
         WHERE market = ? AND interval = ?
         ORDER BY ts DESC
         LIMIT 1`,
+    );
+    this.observationsBetweenStmt = db.prepare(
+      `SELECT id, market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary
+         FROM observations
+        WHERE market = ? AND ts >= ? AND ts <= ?
+        ORDER BY ts ASC`,
     );
     this.observationByMarketDateStmt = db.prepare(
       `SELECT id, market, interval, ts, close, strategy_bias, confidence, trend, volatility, summary
@@ -248,6 +263,15 @@ export class Repository {
         ORDER BY ts DESC
         LIMIT 1`,
     );
+    this.marketMetricsBetweenStmt = db.prepare(
+      `SELECT market, venue, ts, mid_price, best_bid, best_ask, spread_bps,
+              depth_bid_25_bps, depth_ask_25_bps, depth_bid_50_bps, depth_ask_50_bps,
+              imbalance_25_bps, slippage_buy_10k_bps, slippage_sell_10k_bps,
+              open_interest, funding_rate, basis_bps
+         FROM market_metrics
+        WHERE market = ? AND ts >= ? AND ts <= ?
+        ORDER BY ts ASC, venue ASC`,
+    );
   }
 
   upsertCandles(candles: readonly Candle[]): number {
@@ -372,6 +396,36 @@ export class Repository {
     }));
   }
 
+  queryCandlesBetween(
+    market: Market,
+    interval: Interval,
+    startTs: number,
+    endTs: number,
+  ): Candle[] {
+    const rows = this.candlesBetweenStmt.all(market, interval, startTs, endTs) as Array<{
+      market: string;
+      interval: string;
+      open_time: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+      close_time: number;
+    }>;
+    return rows.map((r) => ({
+      market: r.market as Market,
+      interval: r.interval as Interval,
+      openTime: r.open_time,
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
+      volume: r.volume,
+      closeTime: r.close_time,
+    }));
+  }
+
   queryLatestIndicators(
     market: Market,
     interval: Interval,
@@ -438,6 +492,31 @@ export class Repository {
       volatility: row.volatility as Observation["volatility"],
       summary: row.summary,
     };
+  }
+
+  queryObservationsBetween(market: Market, startTs: number, endTs: number): Observation[] {
+    const rows = this.observationsBetweenStmt.all(market, startTs, endTs) as Array<{
+      market: string;
+      interval: string;
+      ts: number;
+      close: number;
+      strategy_bias: string;
+      confidence: number;
+      trend: string;
+      volatility: string;
+      summary: string;
+    }>;
+    return rows.map((r) => ({
+      market: r.market as Market,
+      interval: r.interval as Interval,
+      ts: r.ts,
+      close: r.close,
+      strategyBias: "observe",
+      confidence: r.confidence,
+      trend: r.trend as Observation["trend"],
+      volatility: r.volatility as Observation["volatility"],
+      summary: r.summary,
+    }));
   }
 
   queryLatestObservationsForInterval(interval: Interval): Observation[] {
@@ -672,6 +751,11 @@ export class Repository {
   ): MarketMetric | null {
     const row = this.marketMetricAtOrBeforeStmt.get(market, venue, ts) as MarketMetricRow | undefined;
     return row ? marketMetricFromRow(row) : null;
+  }
+
+  queryMarketMetricsBetween(market: Market, startTs: number, endTs: number): MarketMetric[] {
+    const rows = this.marketMetricsBetweenStmt.all(market, startTs, endTs) as MarketMetricRow[];
+    return rows.map(marketMetricFromRow);
   }
 }
 
