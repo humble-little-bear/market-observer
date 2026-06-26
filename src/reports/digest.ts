@@ -4,7 +4,8 @@ import { makeLogger, type Logger } from "../logger.js";
 import { sendBarkNotification } from "../notifications/bark.js";
 import { getDb } from "../storage/db.js";
 import { Repository } from "../storage/repository.js";
-import type { AlertEvent, DigestRun, Market, MarketMetric, Observation } from "../types.js";
+import { buildStructureInsight } from "../structure/insights.js";
+import type { AlertEvent, DigestRun, Market, Observation } from "../types.js";
 
 export type DigestOptions = {
   nowMs?: number;
@@ -46,38 +47,14 @@ function alertTypeZh(type: AlertEvent["type"]): string {
       return "波动升高";
     case "multi_timeframe_alignment":
       return "多周期同向";
+    case "structure_combo":
+      return "结构共振";
   }
 }
 
 function marketLabel(market: Market): string {
   if (market.endsWith("USDT")) return market.slice(0, -"USDT".length);
   return market;
-}
-
-function fmtUsd(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}k`;
-  return value.toFixed(0);
-}
-
-function structureLine(market: Market, spot: MarketMetric | null, futures: MarketMetric | null): string | null {
-  if (!spot && !futures) return null;
-
-  const source = futures ?? spot;
-  if (!source) return null;
-  const depth = spot
-    ? `现货25bps深度 ${fmtUsd(spot.depthBid25Bps)}/${fmtUsd(spot.depthAsk25Bps)}`
-    : "现货深度暂无";
-  const fut = futures
-    ? `永续价差 ${futures.spreadBps.toFixed(2)}bps，基差 ${futures.basisBps?.toFixed(1) ?? "n/a"}bps，资金费率 ${
-        futures.fundingRate === null ? "n/a" : `${(futures.fundingRate * 100).toFixed(4)}%`
-      }`
-    : "永续暂无";
-  const slip =
-    source.slippageBuy10kBps === null || source.slippageSell10kBps === null
-      ? "10k冲击 n/a"
-      : `10k冲击 ${source.slippageBuy10kBps.toFixed(1)}/${source.slippageSell10kBps.toFixed(1)}bps`;
-  return `${marketLabel(market)} 结构：${depth}；${fut}；${slip}`;
 }
 
 function summarizeAlerts(alerts: readonly AlertEvent[]): string[] {
@@ -119,10 +96,13 @@ function buildDigestBody(repo: Repository, start: number, end: number): string {
     lines.push(
       `${marketLabel(market)} ${obs.close}：${PRIMARY_OBSERVATION_INTERVAL} ${trendZh(obs.trend)} / ${volatilityZh(obs.volatility)}`,
     );
-    const spot = repo.queryLatestMarketMetric(market, "spot");
-    const futures = repo.queryLatestMarketMetric(market, "futures");
-    const structure = structureLine(market, spot, futures);
-    if (structure) lines.push(structure);
+    const insight = buildStructureInsight(repo, market);
+    if (insight) {
+      lines.push(`${marketLabel(market)} 结构：${insight.summary}`);
+      for (const detail of insight.abnormalLines.slice(0, 2)) {
+        lines.push(`${marketLabel(market)} ${detail}`);
+      }
+    }
   }
 
   lines.push(...summarizeAlerts(alerts));

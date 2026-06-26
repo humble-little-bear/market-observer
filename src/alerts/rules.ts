@@ -2,6 +2,7 @@ import { config } from "../config/index.js";
 import { makeLogger, type Logger } from "../logger.js";
 import { getDb } from "../storage/db.js";
 import { Repository } from "../storage/repository.js";
+import { buildStructureInsight, signalZh } from "../structure/insights.js";
 import type { AlertEvent, AlertSeverity, Interval, Market, Observation, Volatility } from "../types.js";
 
 export type EvaluateAlertsOptions = {
@@ -155,6 +156,70 @@ function multiTimeframeAlignmentAlert(repo: Repository, market: Market): AlertEv
   });
 }
 
+function latestIntervalChangePct(repo: Repository, market: Market, interval: Interval): { close: number; changePct: number } | null {
+  const candles = repo.queryLatestCandles(market, interval, Date.now(), 2);
+  if (candles.length < 2) return null;
+  candles.sort((a, b) => a.openTime - b.openTime);
+  const prev = candles[0]!;
+  const latest = candles[1]!;
+  return { close: latest.close, changePct: pctChange(prev.close, latest.close) };
+}
+
+function structureComboAlert(repo: Repository, obs: Observation): AlertEvent | null {
+  if (obs.interval !== "15m" && obs.interval !== "1h" && obs.interval !== "4h") return null;
+
+  const insight = buildStructureInsight(repo, obs.market);
+  if (!insight) return null;
+  const signals = new Set(insight.signals);
+  if (signals.has("stable")) return null;
+
+  const move = latestIntervalChangePct(repo, obs.market, obs.interval);
+  const threshold = obs.interval === "15m"
+    ? config.alerts.sharpMove15mPct
+    : obs.interval === "1h"
+    ? config.alerts.sharpMove1hPct
+    : 2.5;
+  const hasPriceShock = move !== null && Math.abs(move.changePct) >= threshold;
+  const hasDirectionalTrend = obs.trend === "bullish" || obs.trend === "bearish";
+
+  let combo: string | null = null;
+  if (hasPriceShock && signals.has("liquidity_thinning")) {
+    combo = move!.changePct < 0 ? "liquidity_vacuum_down" : "liquidity_vacuum_up";
+  } else if (hasDirectionalTrend && signals.has("futures_crowding")) {
+    combo = obs.trend === "bullish" ? "crowded_long_trend" : "crowded_short_trend";
+  } else if (hasPriceShock && signals.has("basis_divergence")) {
+    combo = "contract_spot_divergence";
+  }
+  if (combo === null) return null;
+
+  const severity: AlertSeverity =
+    combo.startsWith("liquidity_vacuum") || combo === "contract_spot_divergence" ? "warn" : "info";
+  const close = move?.close ?? obs.close;
+  const labels = insight.signals.filter((signal) => signal !== "stable").map(signalZh);
+  return mkAlert({
+    market: obs.market,
+    interval: obs.interval,
+    ts: obs.ts,
+    type: "structure_combo",
+    severity,
+    fingerprint: `${obs.market}:${obs.interval}:structure:${combo}:${obs.ts}`,
+    title: `${obs.market} ${obs.interval} structure combo`,
+    body: `Close ${close}. ${labels.join(", ")}. ${insight.abnormalLines.join(" / ")}`,
+    data: {
+      close,
+      combo,
+      labels,
+      signals: insight.signals,
+      abnormalLines: insight.abnormalLines,
+      trend: obs.trend,
+      changePct: move?.changePct ?? null,
+      fundingRate: insight.futures?.fundingRate ?? null,
+      basisBps: insight.futures?.basisBps ?? null,
+      openInterest: insight.futures?.openInterest ?? null,
+    },
+  });
+}
+
 export function evaluateAlerts(opts: EvaluateAlertsOptions): EvaluateAlertsResult {
   const logger = opts.logger ?? makeLogger(config.logLevel);
   const db = getDb(config.dbPath);
@@ -167,6 +232,7 @@ export function evaluateAlerts(opts: EvaluateAlertsOptions): EvaluateAlertsResul
     trendChangeAlert(latest, prior),
     volatilityUpgradeAlert(latest, prior),
     sharpMoveAlert(repo, opts.market, opts.interval),
+    structureComboAlert(repo, latest),
   ];
 
   if (opts.interval === "1h" || opts.interval === "4h") {

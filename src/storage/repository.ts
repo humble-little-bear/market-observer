@@ -39,6 +39,7 @@ export class Repository {
   private readonly upsertMarketMetricStmt: Database.Statement;
   private readonly latestMarketMetricsStmt: Database.Statement;
   private readonly latestMarketMetricStmt: Database.Statement;
+  private readonly marketMetricAtOrBeforeStmt: Database.Statement;
 
   constructor(db: Database.Database) {
     this.db = db;
@@ -234,6 +235,16 @@ export class Repository {
               open_interest, funding_rate, basis_bps
          FROM market_metrics
         WHERE market = ? AND venue = ?
+        ORDER BY ts DESC
+        LIMIT 1`,
+    );
+    this.marketMetricAtOrBeforeStmt = db.prepare(
+      `SELECT market, venue, ts, mid_price, best_bid, best_ask, spread_bps,
+              depth_bid_25_bps, depth_ask_25_bps, depth_bid_50_bps, depth_ask_50_bps,
+              imbalance_25_bps, slippage_buy_10k_bps, slippage_sell_10k_bps,
+              open_interest, funding_rate, basis_bps
+         FROM market_metrics
+        WHERE market = ? AND venue = ? AND ts <= ?
         ORDER BY ts DESC
         LIMIT 1`,
     );
@@ -651,6 +662,15 @@ export class Repository {
 
   queryLatestMarketMetric(market: Market, venue: MarketMetric["venue"]): MarketMetric | null {
     const row = this.latestMarketMetricStmt.get(market, venue) as MarketMetricRow | undefined;
+    return row ? marketMetricFromRow(row) : null;
+  }
+
+  queryMarketMetricAtOrBefore(
+    market: Market,
+    venue: MarketMetric["venue"],
+    ts: number,
+  ): MarketMetric | null {
+    const row = this.marketMetricAtOrBeforeStmt.get(market, venue, ts) as MarketMetricRow | undefined;
     return row ? marketMetricFromRow(row) : null;
   }
 }

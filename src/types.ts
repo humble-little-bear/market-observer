@@ -41,7 +41,8 @@ export type AlertType =
   | "trend_change"
   | "volatility_upgrade"
   | "sharp_move"
-  | "multi_timeframe_alignment";
+  | "multi_timeframe_alignment"
+  | "structure_combo";
 
 export interface Observation {
   market: Market;

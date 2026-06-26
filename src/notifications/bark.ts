@@ -111,6 +111,8 @@ function alertDirection(event: AlertEvent, data: AlertData): string {
       return String(data.volatility ?? "");
     case "multi_timeframe_alignment":
       return String(data.trend ?? "");
+    case "structure_combo":
+      return String(data.combo ?? "");
   }
 }
 
@@ -184,6 +186,18 @@ function buildChineseAlertMessage(event: AlertEvent): AlertMessage {
         body: `${priceText}1h 和 4h 同为${trendZh(data.trend)}，值得留意`,
       };
     }
+    case "structure_combo": {
+      const labels = Array.isArray(data.labels) ? data.labels.join("、") : "结构异常";
+      const abnormalLines = Array.isArray(data.abnormalLines)
+        ? data.abnormalLines.map(String).join("\n")
+        : "";
+      const changePct = numberFromData(data, "changePct");
+      const changeText = changePct === null ? "" : `，${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+      return {
+        title: `${event.market} ${event.interval} 结构共振`,
+        body: `${closeText}${labels}${changeText}${abnormalLines ? `\n${abnormalLines}` : ""}`,
+      };
+    }
   }
 }
 
@@ -236,6 +250,8 @@ function buildAggregatedAlertMessage(events: readonly AlertEvent[]): AlertMessag
       return { title: `${className}趋势同步变化`, body: lines.join("\n") };
     case "volatility_upgrade":
       return { title: `${className}波动同步升高`, body: lines.join("\n") };
+    case "structure_combo":
+      return { title: `${className}结构信号同步`, body: lines.join("\n") };
   }
 }
 

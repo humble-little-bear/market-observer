@@ -135,6 +135,39 @@ Funding 和 basis 都描述永续和现货的关系。
 
 解释：不是一定失败，但值得后续 alert 层更谨慎地标注“杠杆驱动”。
 
+## 窗口对比和结构标签
+
+`structure/insights` 会把最新结构指标和 15m、1h、4h 前的最近采样点做比较，生成窗口变化率和中文标签。
+
+窗口变化：
+
+- `spotDepth25Pct`：现货 25bps 总深度变化。
+- `futuresDepth25Pct`：永续 25bps 总深度变化。
+- `spotSlippagePct` / `futuresSlippagePct`：10k 冲击成本变化。
+- `openInterestPct`：永续 OI 变化。
+- `basisBpsChange`：期现基差变化，单位 bps。
+- `fundingRateChange`：资金费率变化。
+
+标签：
+
+- `流动性变薄`：1h 或 4h 内，现货/永续 25bps 深度下降超过 30%，或 10k 冲击成本上升超过 50%。
+- `永续拥挤`：1h 或 4h OI 上升超过 2%，且资金费率或期现基差已经明显偏离。
+- `期现偏离`：永续相对现货基差绝对值超过 8bps。
+- `盘口偏多` / `盘口偏空`：现货和永续近端 25bps order book imbalance 平均明显偏向一侧。
+- `结构平稳`：没有触发上述结构异常。
+
+这些标签会出现在 `status` 和 6 小时 digest 里。digest 默认只显示标签；只有异常标签出现时，才展开关键原因，避免手环/手机消息太长。
+
+## 组合 alert
+
+结构指标不会单独推送。alert 层只在价格和结构共振时产生 `structure_combo`：
+
+- 价格急涨/急跌 + `流动性变薄`：标注为流动性真空下的价格动作。
+- 有方向趋势 + `永续拥挤`：标注为杠杆仓位拥挤的趋势。
+- 价格急涨/急跌 + `期现偏离`：标注为合约和现货拉扯。
+
+这样设计是为了减少噪声：funding、OI、盘口偏斜本身都容易误报，和价格动作合并后再推送，信噪比会更高。
+
 ## 采样策略
 
 默认：
@@ -157,8 +190,8 @@ STRUCTURE_SLIPPAGE_NOTIONAL=10000
 
 优先级从高到低：
 
-1. 为 `market_metrics` 增加窗口比较：15m/1h/4h 的 depth、slippage、OI 变化率。
-2. 在 digest 中加入“结构状态标签”：流动性变薄、永续拥挤、期现偏离。
-3. Alert 层只推组合信号，避免单个盘口噪声直接推送。
+1. 观察一周 `structure_combo` 的实际触发频率，再调阈值。
+2. 把 `structure/insights` 输出成 JSON 给后续 agent 使用。
+3. 增加“异常持续时间”：不是只看最新窗口，而是看标签已经连续存在多久。
 4. 如果 REST snapshot 不够，再引入 WebSocket order book，但需要先设计重连、校验和降级策略。
 5. 引入新闻/agent 时，把市场结构作为事实层输入，而不是让 agent 直接从价格文本里猜流动性。

@@ -3,6 +3,7 @@ import { PRIMARY_OBSERVATION_INTERVAL } from "../agents/observer.js";
 import { intervalToMs } from "../intervals.js";
 import { getDb } from "../storage/db.js";
 import { Repository } from "../storage/repository.js";
+import { buildStructureInsight } from "../structure/insights.js";
 import type { AlertEvent, MarketMetric } from "../types.js";
 
 export type StatusOptions = {
@@ -48,6 +49,10 @@ function fmtMetric(metric: MarketMetric): string {
   return `${metric.venue} mid ${metric.midPrice.toFixed(4)} spread ${metric.spreadBps.toFixed(2)}bps depth25 ${fmtUsd(metric.depthBid25Bps)}/${fmtUsd(metric.depthAsk25Bps)} imb ${metric.imbalance25Bps.toFixed(2)}${slip}${basis}${funding}${oi} lag ${fmtLag(metric.ts, Date.now())}`;
 }
 
+function fmtPct(value: number | null): string {
+  return value === null ? "n/a" : `${value >= 0 ? "+" : ""}${value.toFixed(0)}%`;
+}
+
 export function renderStatus(opts: StatusOptions = {}): string {
   const nowMs = opts.nowMs ?? Date.now();
   const db = getDb(config.dbPath);
@@ -83,6 +88,16 @@ export function renderStatus(opts: StatusOptions = {}): string {
     const metrics = repo.queryLatestMarketMetrics(market, 2);
     for (const metric of metrics) {
       lines.push(`  structure ${fmtMetric(metric)}`);
+    }
+    const insight = buildStructureInsight(repo, market);
+    if (insight) {
+      lines.push(`  structure labels: ${insight.summary}`);
+      const oneHour = insight.windows.find((w) => w.window === "1h");
+      if (oneHour) {
+        lines.push(
+          `  structure 1h: spotDepth ${fmtPct(oneHour.spotDepth25Pct)} futuresDepth ${fmtPct(oneHour.futuresDepth25Pct)} oi ${fmtPct(oneHour.openInterestPct)} slippage ${fmtPct(oneHour.spotSlippagePct)}/${fmtPct(oneHour.futuresSlippagePct)}`,
+        );
+      }
     }
     lines.push("");
   }

@@ -168,6 +168,8 @@ First-pass alert rules:
 - 1h/4h/1d trend changes.
 - Volatility upgrades into `elevated` or `high`.
 - 1h and 4h trend alignment when both are non-ranging.
+- Structure combo alerts when price action and market-structure stress appear
+  together.
 
 ## Server deployment
 
@@ -241,7 +243,8 @@ These rows are stored in SQLite table `market_metrics`. The first version uses
 REST snapshots every five minutes by default; this is intentionally calmer than
 a WebSocket order book and stays well below Binance public-data rate limits.
 `status` shows the latest structure row, and the 6-hour digest includes a short
-liquidity/futures line when data is available.
+structure label when data is available. Abnormal structure states expand into
+one or two detail lines; normal states stay compact for phone/watch display.
 
 See [docs/market-structure.md](./docs/market-structure.md) for the methodology,
 field definitions, and how to interpret these metrics.
@@ -277,6 +280,7 @@ market-observer/
       compute.ts            # align everything by open_time
     agents/observer.ts      # latest indicators → structured Observation
     alerts/rules.ts         # observation/candle rules → deduplicated alert events
+    structure/insights.ts   # market-structure window changes + labels
     daemon/worker.ts        # long-lived paced worker
     inspect/status.ts       # operational status/alerts rendering
     notifications/bark.ts   # Bark summary/alert dispatch
