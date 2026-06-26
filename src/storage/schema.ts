@@ -103,4 +103,28 @@ export const DDL: readonly string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_digest_runs_period
      ON digest_runs (period_start DESC, period_end DESC);`,
+
+  `CREATE TABLE IF NOT EXISTS market_metrics (
+     market                 TEXT    NOT NULL,
+     venue                  TEXT    NOT NULL,
+     ts                     INTEGER NOT NULL,
+     mid_price              REAL    NOT NULL,
+     best_bid               REAL    NOT NULL,
+     best_ask               REAL    NOT NULL,
+     spread_bps             REAL    NOT NULL,
+     depth_bid_25_bps       REAL    NOT NULL,
+     depth_ask_25_bps       REAL    NOT NULL,
+     depth_bid_50_bps       REAL    NOT NULL,
+     depth_ask_50_bps       REAL    NOT NULL,
+     imbalance_25_bps       REAL    NOT NULL,
+     slippage_buy_10k_bps   REAL,
+     slippage_sell_10k_bps  REAL,
+     open_interest          REAL,
+     funding_rate           REAL,
+     basis_bps              REAL,
+     PRIMARY KEY (market, venue, ts)
+   );`,
+
+  `CREATE INDEX IF NOT EXISTS idx_market_metrics_latest
+     ON market_metrics (market, venue, ts DESC);`,
 ];

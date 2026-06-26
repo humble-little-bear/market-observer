@@ -3,7 +3,7 @@ import { PRIMARY_OBSERVATION_INTERVAL } from "../agents/observer.js";
 import { intervalToMs } from "../intervals.js";
 import { getDb } from "../storage/db.js";
 import { Repository } from "../storage/repository.js";
-import type { AlertEvent } from "../types.js";
+import type { AlertEvent, MarketMetric } from "../types.js";
 
 export type StatusOptions = {
   nowMs?: number;
@@ -29,6 +29,23 @@ function fmtAlert(event: AlertEvent | undefined): string {
   if (!event) return "none";
   const sent = event.sentAt === null ? "unsent" : `sent ${fmtTs(event.sentAt)}`;
   return `${fmtTs(event.ts)} ${event.severity} ${event.market} ${event.interval} ${event.type} (${sent})`;
+}
+
+function fmtUsd(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}k`;
+  return value.toFixed(0);
+}
+
+function fmtMetric(metric: MarketMetric): string {
+  const oi = metric.openInterest === null ? "" : ` oi ${metric.openInterest.toFixed(0)}`;
+  const funding = metric.fundingRate === null ? "" : ` funding ${(metric.fundingRate * 100).toFixed(4)}%`;
+  const basis = metric.basisBps === null ? "" : ` basis ${metric.basisBps.toFixed(1)}bps`;
+  const slip =
+    metric.slippageBuy10kBps === null || metric.slippageSell10kBps === null
+      ? ""
+      : ` slip10k ${metric.slippageBuy10kBps.toFixed(1)}/${metric.slippageSell10kBps.toFixed(1)}bps`;
+  return `${metric.venue} mid ${metric.midPrice.toFixed(4)} spread ${metric.spreadBps.toFixed(2)}bps depth25 ${fmtUsd(metric.depthBid25Bps)}/${fmtUsd(metric.depthAsk25Bps)} imb ${metric.imbalance25Bps.toFixed(2)}${slip}${basis}${funding}${oi} lag ${fmtLag(metric.ts, Date.now())}`;
 }
 
 export function renderStatus(opts: StatusOptions = {}): string {
@@ -62,6 +79,10 @@ export function renderStatus(opts: StatusOptions = {}): string {
       lines.push(
         `  primary ${PRIMARY_OBSERVATION_INTERVAL}: ${primary.trend}/${primary.volatility} close ${primary.close}`,
       );
+    }
+    const metrics = repo.queryLatestMarketMetrics(market, 2);
+    for (const metric of metrics) {
+      lines.push(`  structure ${fmtMetric(metric)}`);
     }
     lines.push("");
   }

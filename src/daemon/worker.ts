@@ -1,6 +1,7 @@
 import { config } from "../config/index.js";
 import { makeLogger, type Logger } from "../logger.js";
 import { runCollect } from "../collectors/collect.js";
+import { runCollectStructure } from "../collectors/structure.js";
 import { runAnalyze } from "../agents/observer.js";
 import { evaluateAlerts } from "../alerts/rules.js";
 import { dispatchPendingBarkAlerts } from "../notifications/bark.js";
@@ -15,8 +16,9 @@ export type RunDaemonOptions = {
 };
 
 type Task = {
+  kind: "candle" | "structure";
   market: Market;
-  interval: Interval;
+  interval?: Interval;
   nextDueMs: number;
 };
 
@@ -30,6 +32,7 @@ function buildTasks(now: number): Task[] {
   for (const market of config.markets) {
     for (const interval of config.intervals) {
       tasks.push({
+        kind: "candle",
         market,
         interval,
         nextDueMs: now + offset,
@@ -37,11 +40,19 @@ function buildTasks(now: number): Task[] {
       offset += config.collectMinRequestIntervalMs;
     }
   }
+  for (const market of config.structure.markets) {
+    tasks.push({
+      kind: "structure",
+      market,
+      nextDueMs: now + offset,
+    });
+    offset += config.collectMinRequestIntervalMs;
+  }
   return tasks;
 }
 
 function describeTasks(tasks: readonly Task[]): string {
-  return tasks.map((t) => `${t.market}:${t.interval}`).join(", ");
+  return tasks.map((t) => (t.kind === "structure" ? `${t.market}:structure` : `${t.market}:${t.interval}`)).join(", ");
 }
 
 async function enforceRequestGap(lastRequestAt: { value: number }): Promise<void> {
@@ -58,6 +69,20 @@ async function processTask(
   const { logger, lastRequestAt, notify } = opts;
   await enforceRequestGap(lastRequestAt);
 
+  if (task.kind === "structure") {
+    logger.info(`[daemon] collect-structure ${task.market}`);
+    const s = await runCollectStructure({
+      markets: [task.market],
+      logger,
+    });
+    logger.info(
+      `[daemon] collected structure ${task.market}: metrics=${s.metricsUpserted} failed=${s.failed.length}`,
+    );
+    task.nextDueMs = Date.now() + config.structure.intervalMs;
+    return;
+  }
+
+  if (!task.interval) throw new Error(`missing interval for candle task ${task.market}`);
   logger.info(`[daemon] collect ${task.market} ${task.interval}`);
   const c = await runCollect({
     markets: [task.market],

@@ -1,8 +1,28 @@
 import { z } from "zod";
 import { assertSafeSymbol, assertSafeUrl, SafetyError } from "../safety/guard.js";
-import type { Candle, Interval, Market } from "../types.js";
+import type { Candle, Interval, Market, MarketVenue } from "../types.js";
 
 const RawKlineSchema = z.array(z.unknown()).min(7);
+const RawBookLevelSchema = z.tuple([z.string(), z.string()]);
+const RawDepthSchema = z.object({
+  lastUpdateId: z.number().optional(),
+  E: z.number().optional(),
+  T: z.number().optional(),
+  bids: z.array(RawBookLevelSchema),
+  asks: z.array(RawBookLevelSchema),
+});
+const RawOpenInterestSchema = z.object({
+  openInterest: z.string(),
+  symbol: z.string(),
+  time: z.number().optional(),
+});
+const RawFundingRateSchema = z.array(
+  z.object({
+    symbol: z.string(),
+    fundingRate: z.string(),
+    fundingTime: z.number(),
+  }),
+);
 
 function toNumber(v: unknown): number {
   if (typeof v === "number") return v;
@@ -64,18 +84,20 @@ function buildFuturesUrl(baseUrl: string, market: Market, interval: Interval, li
   //   testnet.binance.vision → testnet.binancefuture.com
   // We do a simple prefix swap: if the host begins with "api.", replace
   // with "fapi."; otherwise insert "fapi." at the start.
-  const rawHost = baseUrl.replace(/^https?:\/\//, "").split("/")[0] ?? "api.binance.com";
-  const host = rawHost.startsWith("api.")
-    ? `fapi.${rawHost.slice(4)}`
-    : rawHost.startsWith("fapi.")
-    ? rawHost
-    : `fapi.${rawHost}`;
-  const u = new URL(`https://${host}/fapi/v1/klines`);
+  const u = new URL(`${futuresBaseUrl(baseUrl)}/fapi/v1/klines`);
   u.searchParams.set("symbol", market);
   u.searchParams.set("interval", interval);
   u.searchParams.set("limit", String(limit));
   if (endTimeMs !== undefined) u.searchParams.set("endTime", String(endTimeMs));
   return u.toString();
+}
+
+function futuresBaseUrl(baseUrl: string): string {
+  const rawHost = baseUrl.replace(/^https?:\/\//, "").split("/")[0] ?? "api.binance.com";
+  if (rawHost.startsWith("fapi.")) return `https://${rawHost}`;
+  if (rawHost === "data-api.binance.vision") return "https://fapi.binance.com";
+  if (rawHost.startsWith("api.")) return `https://fapi.${rawHost.slice(4)}`;
+  return `https://fapi.${rawHost}`;
 }
 
 function parseKlines(raw: unknown, market: Market, interval: Interval): Candle[] {
@@ -105,6 +127,44 @@ function parseKlines(raw: unknown, market: Market, interval: Interval): Candle[]
     });
   }
   return out;
+}
+
+export type BookLevel = {
+  price: number;
+  quantity: number;
+};
+
+export type OrderBookSnapshot = {
+  market: Market;
+  venue: MarketVenue;
+  eventTime: number;
+  bids: BookLevel[];
+  asks: BookLevel[];
+};
+
+export type FuturesStats = {
+  market: Market;
+  openInterest: number | null;
+  fundingRate: number | null;
+};
+
+function parseBookLevels(rows: readonly [string, string][]): BookLevel[] {
+  return rows.map(([price, quantity]) => ({
+    price: toNumber(price),
+    quantity: toNumber(quantity),
+  }));
+}
+
+function parseDepth(raw: unknown, market: Market, venue: MarketVenue): OrderBookSnapshot {
+  const parsed = RawDepthSchema.parse(raw);
+  const eventTime = parsed.E ?? parsed.T ?? Date.now();
+  return {
+    market,
+    venue,
+    eventTime,
+    bids: parseBookLevels(parsed.bids),
+    asks: parseBookLevels(parsed.asks),
+  };
 }
 
 async function fetchOnce(
@@ -201,6 +261,82 @@ export async function fetchKlines(opts: FetchKlinesOptions): Promise<FetchKlines
     }
     throw e;
   }
+}
+
+export type FetchDepthOptions = {
+  baseUrl: string;
+  market: Market;
+  venue: MarketVenue;
+  limit?: number;
+  timeoutMs?: number;
+  maxRetries?: number;
+  fetcher?: typeof fetch;
+};
+
+export async function fetchDepth(opts: FetchDepthOptions): Promise<OrderBookSnapshot> {
+  assertSafeSymbol(opts.market);
+  const {
+    baseUrl,
+    market,
+    venue,
+    limit = 100,
+    timeoutMs = 15_000,
+    maxRetries = 3,
+    fetcher = fetch,
+  } = opts;
+  if (![20, 50, 100, 500, 1000, 5000].includes(limit)) {
+    throw new Error(`unsupported depth limit: ${limit}`);
+  }
+
+  const root = venue === "spot" ? baseUrl.replace(/\/+$/, "") : futuresBaseUrl(baseUrl);
+  const path = venue === "spot" ? "/api/v3/depth" : "/fapi/v1/depth";
+  const u = new URL(`${root}${path}`);
+  u.searchParams.set("symbol", market);
+  u.searchParams.set("limit", String(limit));
+  const url = u.toString();
+  assertSafeUrl(url, "GET");
+
+  const raw = await retry(() => fetchOnce(url, timeoutMs, fetcher), maxRetries);
+  return parseDepth(raw, market, venue);
+}
+
+export type FetchFuturesStatsOptions = {
+  baseUrl: string;
+  market: Market;
+  timeoutMs?: number;
+  maxRetries?: number;
+  fetcher?: typeof fetch;
+};
+
+export async function fetchFuturesStats(opts: FetchFuturesStatsOptions): Promise<FuturesStats> {
+  assertSafeSymbol(opts.market);
+  const {
+    baseUrl,
+    market,
+    timeoutMs = 15_000,
+    maxRetries = 3,
+    fetcher = fetch,
+  } = opts;
+  const root = futuresBaseUrl(baseUrl);
+
+  const oiUrl = new URL(`${root}/fapi/v1/openInterest`);
+  oiUrl.searchParams.set("symbol", market);
+  assertSafeUrl(oiUrl.toString(), "GET");
+
+  const fundingUrl = new URL(`${root}/fapi/v1/fundingRate`);
+  fundingUrl.searchParams.set("symbol", market);
+  fundingUrl.searchParams.set("limit", "1");
+  assertSafeUrl(fundingUrl.toString(), "GET");
+
+  const rawOi = await retry(() => fetchOnce(oiUrl.toString(), timeoutMs, fetcher), maxRetries);
+  const rawFunding = await retry(() => fetchOnce(fundingUrl.toString(), timeoutMs, fetcher), maxRetries);
+  const oi = RawOpenInterestSchema.parse(rawOi);
+  const funding = RawFundingRateSchema.parse(rawFunding);
+  return {
+    market,
+    openInterest: toNumber(oi.openInterest),
+    fundingRate: funding.length > 0 ? toNumber(funding[funding.length - 1].fundingRate) : null,
+  };
 }
 
 async function retry(fn: () => Promise<unknown>, maxRetries: number): Promise<unknown> {

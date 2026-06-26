@@ -5,6 +5,7 @@ import type {
   DigestRun,
   Indicator,
   Interval,
+  MarketMetric,
   Market,
   Observation,
   SymbolStatus,
@@ -35,6 +36,9 @@ export class Repository {
   private readonly insertDigestRunStmt: Database.Statement;
   private readonly digestRunByPeriodStmt: Database.Statement;
   private readonly markDigestRunSentStmt: Database.Statement;
+  private readonly upsertMarketMetricStmt: Database.Statement;
+  private readonly latestMarketMetricsStmt: Database.Statement;
+  private readonly latestMarketMetricStmt: Database.Statement;
 
   constructor(db: Database.Database) {
     this.db = db;
@@ -185,6 +189,53 @@ export class Repository {
     );
     this.markDigestRunSentStmt = db.prepare(
       `UPDATE digest_runs SET sent_at = ? WHERE id = ?`,
+    );
+    this.upsertMarketMetricStmt = db.prepare(
+      `INSERT INTO market_metrics
+         (market, venue, ts, mid_price, best_bid, best_ask, spread_bps,
+          depth_bid_25_bps, depth_ask_25_bps, depth_bid_50_bps, depth_ask_50_bps,
+          imbalance_25_bps, slippage_buy_10k_bps, slippage_sell_10k_bps,
+          open_interest, funding_rate, basis_bps)
+       VALUES
+         (@market, @venue, @ts, @midPrice, @bestBid, @bestAsk, @spreadBps,
+          @depthBid25Bps, @depthAsk25Bps, @depthBid50Bps, @depthAsk50Bps,
+          @imbalance25Bps, @slippageBuy10kBps, @slippageSell10kBps,
+          @openInterest, @fundingRate, @basisBps)
+       ON CONFLICT(market, venue, ts) DO UPDATE SET
+         mid_price = excluded.mid_price,
+         best_bid = excluded.best_bid,
+         best_ask = excluded.best_ask,
+         spread_bps = excluded.spread_bps,
+         depth_bid_25_bps = excluded.depth_bid_25_bps,
+         depth_ask_25_bps = excluded.depth_ask_25_bps,
+         depth_bid_50_bps = excluded.depth_bid_50_bps,
+         depth_ask_50_bps = excluded.depth_ask_50_bps,
+         imbalance_25_bps = excluded.imbalance_25_bps,
+         slippage_buy_10k_bps = excluded.slippage_buy_10k_bps,
+         slippage_sell_10k_bps = excluded.slippage_sell_10k_bps,
+         open_interest = excluded.open_interest,
+         funding_rate = excluded.funding_rate,
+         basis_bps = excluded.basis_bps`,
+    );
+    this.latestMarketMetricsStmt = db.prepare(
+      `SELECT market, venue, ts, mid_price, best_bid, best_ask, spread_bps,
+              depth_bid_25_bps, depth_ask_25_bps, depth_bid_50_bps, depth_ask_50_bps,
+              imbalance_25_bps, slippage_buy_10k_bps, slippage_sell_10k_bps,
+              open_interest, funding_rate, basis_bps
+         FROM market_metrics
+        WHERE market = ?
+        ORDER BY ts DESC, venue ASC
+        LIMIT ?`,
+    );
+    this.latestMarketMetricStmt = db.prepare(
+      `SELECT market, venue, ts, mid_price, best_bid, best_ask, spread_bps,
+              depth_bid_25_bps, depth_ask_25_bps, depth_bid_50_bps, depth_ask_50_bps,
+              imbalance_25_bps, slippage_buy_10k_bps, slippage_sell_10k_bps,
+              open_interest, funding_rate, basis_bps
+         FROM market_metrics
+        WHERE market = ? AND venue = ?
+        ORDER BY ts DESC
+        LIMIT 1`,
     );
   }
 
@@ -561,6 +612,47 @@ export class Repository {
   markDigestRunSent(id: number, sentAt: number): void {
     this.markDigestRunSentStmt.run(sentAt, id);
   }
+
+  upsertMarketMetrics(rows: readonly MarketMetric[]): number {
+    if (rows.length === 0) return 0;
+    const tx = this.db.transaction((items: readonly MarketMetric[]) => {
+      let n = 0;
+      for (const m of items) {
+        this.upsertMarketMetricStmt.run({
+          market: m.market,
+          venue: m.venue,
+          ts: m.ts,
+          midPrice: m.midPrice,
+          bestBid: m.bestBid,
+          bestAsk: m.bestAsk,
+          spreadBps: m.spreadBps,
+          depthBid25Bps: m.depthBid25Bps,
+          depthAsk25Bps: m.depthAsk25Bps,
+          depthBid50Bps: m.depthBid50Bps,
+          depthAsk50Bps: m.depthAsk50Bps,
+          imbalance25Bps: m.imbalance25Bps,
+          slippageBuy10kBps: m.slippageBuy10kBps,
+          slippageSell10kBps: m.slippageSell10kBps,
+          openInterest: m.openInterest,
+          fundingRate: m.fundingRate,
+          basisBps: m.basisBps,
+        });
+        n++;
+      }
+      return n;
+    });
+    return tx(rows);
+  }
+
+  queryLatestMarketMetrics(market: Market, limit = 4): MarketMetric[] {
+    const rows = this.latestMarketMetricsStmt.all(market, limit) as MarketMetricRow[];
+    return rows.map(marketMetricFromRow);
+  }
+
+  queryLatestMarketMetric(market: Market, venue: MarketMetric["venue"]): MarketMetric | null {
+    const row = this.latestMarketMetricStmt.get(market, venue) as MarketMetricRow | undefined;
+    return row ? marketMetricFromRow(row) : null;
+  }
 }
 
 type AlertEventRow = {
@@ -590,5 +682,47 @@ function alertEventFromRow(r: AlertEventRow): AlertEvent {
     body: r.body,
     dataJson: r.data_json,
     sentAt: r.sent_at,
+  };
+}
+
+type MarketMetricRow = {
+      market: string;
+      venue: MarketMetric["venue"];
+      ts: number;
+      mid_price: number;
+      best_bid: number;
+      best_ask: number;
+      spread_bps: number;
+      depth_bid_25_bps: number;
+      depth_ask_25_bps: number;
+      depth_bid_50_bps: number;
+      depth_ask_50_bps: number;
+      imbalance_25_bps: number;
+      slippage_buy_10k_bps: number | null;
+      slippage_sell_10k_bps: number | null;
+      open_interest: number | null;
+      funding_rate: number | null;
+      basis_bps: number | null;
+};
+
+function marketMetricFromRow(r: MarketMetricRow): MarketMetric {
+  return {
+    market: r.market as Market,
+    venue: r.venue,
+    ts: r.ts,
+    midPrice: r.mid_price,
+    bestBid: r.best_bid,
+    bestAsk: r.best_ask,
+    spreadBps: r.spread_bps,
+    depthBid25Bps: r.depth_bid_25_bps,
+    depthAsk25Bps: r.depth_ask_25_bps,
+    depthBid50Bps: r.depth_bid_50_bps,
+    depthAsk50Bps: r.depth_ask_50_bps,
+    imbalance25Bps: r.imbalance_25_bps,
+    slippageBuy10kBps: r.slippage_buy_10k_bps,
+    slippageSell10kBps: r.slippage_sell_10k_bps,
+    openInterest: r.open_interest,
+    fundingRate: r.funding_rate,
+    basisBps: r.basis_bps,
   };
 }

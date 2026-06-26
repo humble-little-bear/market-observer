@@ -84,3 +84,25 @@ export interface DigestRun {
   body: string;
   sentAt: number | null;
 }
+
+export type MarketVenue = "spot" | "futures";
+
+export interface MarketMetric {
+  market: Market;
+  venue: MarketVenue;
+  ts: number;
+  midPrice: number;
+  bestBid: number;
+  bestAsk: number;
+  spreadBps: number;
+  depthBid25Bps: number;
+  depthAsk25Bps: number;
+  depthBid50Bps: number;
+  depthAsk50Bps: number;
+  imbalance25Bps: number;
+  slippageBuy10kBps: number | null;
+  slippageSell10kBps: number | null;
+  openInterest: number | null;
+  fundingRate: number | null;
+  basisBps: number | null;
+}
