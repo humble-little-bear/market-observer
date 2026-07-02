@@ -38,6 +38,11 @@ const EnvSchema = z.object({
   GOLD_MOVE_5M_PCT: z.coerce.number().positive().default(0.4),
   GOLD_MOVE_15M_PCT: z.coerce.number().positive().default(0.8),
   GOLD_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+  PULSE_MARKETS: z.string().optional(),
+  PULSE_MOVE_1M_PCT: z.coerce.number().positive().default(0.5),
+  PULSE_MOVE_5M_PCT: z.coerce.number().positive().default(1.0),
+  PULSE_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  PULSE_ALERT_COOLDOWN_MS: z.coerce.number().int().positive().default(300_000),
 });
 
 export type AppConfig = {
@@ -71,6 +76,13 @@ export type AppConfig = {
     move5mPct: number;
     move15mPct: number;
     monitorIntervalMs: number;
+  };
+  pulse: {
+    markets: readonly Market[];
+    move1mPct: number;
+    move5mPct: number;
+    intervalMs: number;
+    cooldownMs: number;
   };
   markets: readonly Market[];
   intervals: readonly Interval[];
@@ -131,6 +143,11 @@ function buildConfig(): AppConfig {
     GOLD_MOVE_5M_PCT: merged.GOLD_MOVE_5M_PCT,
     GOLD_MOVE_15M_PCT: merged.GOLD_MOVE_15M_PCT,
     GOLD_MONITOR_INTERVAL_MS: merged.GOLD_MONITOR_INTERVAL_MS,
+    PULSE_MARKETS: merged.PULSE_MARKETS,
+    PULSE_MOVE_1M_PCT: merged.PULSE_MOVE_1M_PCT,
+    PULSE_MOVE_5M_PCT: merged.PULSE_MOVE_5M_PCT,
+    PULSE_INTERVAL_MS: merged.PULSE_INTERVAL_MS,
+    PULSE_ALERT_COOLDOWN_MS: merged.PULSE_ALERT_COOLDOWN_MS,
   });
 
   const dataDir = path.resolve(path.dirname(parsed.DB_PATH));
@@ -178,11 +195,26 @@ function buildConfig(): AppConfig {
       move15mPct: parsed.GOLD_MOVE_15M_PCT,
       monitorIntervalMs: parsed.GOLD_MONITOR_INTERVAL_MS,
     },
+    pulse: {
+      markets: parsePulseMarkets(parsed.PULSE_MARKETS, markets),
+      move1mPct: parsed.PULSE_MOVE_1M_PCT,
+      move5mPct: parsed.PULSE_MOVE_5M_PCT,
+      intervalMs: parsed.PULSE_INTERVAL_MS,
+      cooldownMs: parsed.PULSE_ALERT_COOLDOWN_MS,
+    },
     markets,
     intervals,
     dataDir,
     reportsDir,
   };
+}
+
+function parsePulseMarkets(
+  input: string | undefined,
+  observedMarkets: readonly Market[],
+): readonly Market[] {
+  if (input !== undefined && input.trim() !== "") return parseMarkets(input);
+  return observedMarkets;
 }
 
 function parsePipeList(input: string): readonly string[] {
