@@ -6,8 +6,10 @@ import { runCollectStructure } from "./collectors/structure.js";
 import { runAnalyze } from "./agents/observer.js";
 import { buildDailyReport } from "./reports/daily.js";
 import { buildDigestRun, runDigest } from "./reports/digest.js";
-import { dispatchPendingBarkAlerts, sendBarkMarketSummary } from "./notifications/bark.js";
+import { dispatchPendingBarkAlerts, sendBarkMarketSummary, sendBarkNotification } from "./notifications/bark.js";
 import { runDaemon } from "./daemon/worker.js";
+import { runGoldCause, runGoldCauseDaemon } from "./gold/run.js";
+import { renderGoldCauseBark, renderGoldCauseReport } from "./gold/reporting/text.js";
 import { runServe } from "./server/serve.js";
 import { renderAlerts, renderStatus } from "./inspect/status.js";
 import cron from "node-cron";
@@ -189,6 +191,41 @@ export function buildProgram(): Command {
         await runDaemon({ logger: log, notify: opts.notify === true });
       } catch (e) {
         log.error("daemon failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("gold"))
+    .description("Scan gold futures move + Fed/rates/dollar headlines and explain likely short-term cause")
+    .option("--no-move", "skip gold price move detection and only scan headlines")
+    .option("--notify", "send a Bark notification when the short-window gold move threshold is crossed")
+    .action(async (opts: { logLevel?: string; move?: boolean; notify?: boolean }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        const run = await runGoldCause({ logger: log, includeMove: opts.move !== false });
+        console.log(renderGoldCauseReport(run));
+        if (opts.notify === true && run.move?.triggered) {
+          await sendBarkNotification({ ...renderGoldCauseBark(run), logger: log, level: "timeSensitive" });
+        }
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        log.error("gold failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("gold-daemon"))
+    .description("Run the gold cause monitor loop; only pushes when price move thresholds are crossed")
+    .option("--notify", "push triggered gold cause alerts through Bark")
+    .action(async (opts: { logLevel?: string; notify?: boolean }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        await runGoldCauseDaemon({ logger: log, notify: opts.notify === true });
+      } catch (e) {
+        log.error("gold-daemon failed", e);
         closeDb();
         process.exit(1);
       }

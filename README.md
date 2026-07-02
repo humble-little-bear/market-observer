@@ -71,6 +71,13 @@ optional). All three have safe public defaults:
 | `BARK_DEVICE_KEY` | unset                         | optional Bark iOS device key  |
 | `BARK_GROUP`      | `market-observer`             | Bark notification group       |
 | `BARK_LEVEL`      | `active`                      | `active`/`timeSensitive`/`passive` |
+| `GOLD_CAUSE_ENABLED` | `false`                    | deployment flag for optional gold monitor |
+| `GOLD_SYMBOL`     | `GC=F`                        | Yahoo Finance symbol used for gold futures move detection |
+| `GOLD_NEWS_QUERIES` | `gold Fed|gold Treasury yields|gold dollar|Fed Chair gold|XAUUSD Fed` | Google News RSS queries |
+| `GOLD_NEWS_LOOKBACK_MINUTES` | `240`             | headline scan window |
+| `GOLD_MOVE_5M_PCT` | `0.4`                        | 5m gold move alert threshold |
+| `GOLD_MOVE_15M_PCT` | `0.8`                       | 15m gold move alert threshold |
+| `GOLD_MONITOR_INTERVAL_MS` | `300000`            | gold monitor loop interval |
 
 See `.env.example`.
 
@@ -90,6 +97,8 @@ node dist/cli.js dispatch-alerts # send pending unsent alerts to Bark
 node dist/cli.js digest    # render latest completed digest window
 node dist/cli.js daemon    # long-lived collector → observer → alert worker
 node dist/cli.js serve     # read-only API + dashboard
+node dist/cli.js gold      # explain gold move + Fed/rates/dollar headlines
+node dist/cli.js gold-daemon --notify # push only threshold-crossing gold cause alerts
 node dist/cli.js status    # inspect DB freshness and latest observations
 node dist/cli.js alerts    # list recent alert events
 node dist/cli.js cron      # start the in-process scheduler (Ctrl+C to stop)
@@ -163,6 +172,31 @@ manually with:
 node dist/cli.js digest
 node dist/cli.js digest --notify
 ```
+
+## Gold cause monitor
+
+`gold` is a separate macro/event attribution layer for short-term gold moves. It
+does not trade, does not use exchange account keys, and does not mutate external
+state. It reads:
+
+- Yahoo Finance `GC=F` 5-minute chart data for 5m/15m gold move detection.
+- Fed public pages for same-day speeches/statements/minutes.
+- Google News RSS headlines for gold/Fed/yields/dollar context.
+
+Run a one-shot scan:
+
+```bash
+node dist/cli.js gold
+```
+
+Run a loop that only pushes Bark when the 5m/15m move thresholds are crossed:
+
+```bash
+node dist/cli.js gold-daemon --notify
+```
+
+The output maps headlines back to the gold screen indicators, especially `#4`
+10Y TIPS real yield, `#5` dollar index/proxy, and `#10` gold-S&P stress regime.
 
 First-pass alert rules:
 

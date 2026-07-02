@@ -31,6 +31,13 @@ const EnvSchema = z.object({
   BARK_DEVICE_KEY: z.preprocess(optionalString, z.string().min(1).optional()),
   BARK_GROUP: z.string().default("market-observer"),
   BARK_LEVEL: BarkLevelSchema,
+  GOLD_CAUSE_ENABLED: z.coerce.boolean().default(false),
+  GOLD_SYMBOL: z.string().default("GC=F"),
+  GOLD_NEWS_QUERIES: z.string().default("gold Fed|gold Treasury yields|gold dollar|Fed Chair gold|XAUUSD Fed"),
+  GOLD_NEWS_LOOKBACK_MINUTES: z.coerce.number().int().positive().default(240),
+  GOLD_MOVE_5M_PCT: z.coerce.number().positive().default(0.4),
+  GOLD_MOVE_15M_PCT: z.coerce.number().positive().default(0.8),
+  GOLD_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 });
 
 export type AppConfig = {
@@ -55,6 +62,15 @@ export type AppConfig = {
     intervalMs: number;
     depthLimit: number;
     slippageNotional: number;
+  };
+  goldCause: {
+    enabled: boolean;
+    symbol: string;
+    newsQueries: readonly string[];
+    newsLookbackMinutes: number;
+    move5mPct: number;
+    move15mPct: number;
+    monitorIntervalMs: number;
   };
   markets: readonly Market[];
   intervals: readonly Interval[];
@@ -108,6 +124,13 @@ function buildConfig(): AppConfig {
     BARK_DEVICE_KEY: merged.BARK_DEVICE_KEY,
     BARK_GROUP: merged.BARK_GROUP,
     BARK_LEVEL: merged.BARK_LEVEL,
+    GOLD_CAUSE_ENABLED: merged.GOLD_CAUSE_ENABLED,
+    GOLD_SYMBOL: merged.GOLD_SYMBOL,
+    GOLD_NEWS_QUERIES: merged.GOLD_NEWS_QUERIES,
+    GOLD_NEWS_LOOKBACK_MINUTES: merged.GOLD_NEWS_LOOKBACK_MINUTES,
+    GOLD_MOVE_5M_PCT: merged.GOLD_MOVE_5M_PCT,
+    GOLD_MOVE_15M_PCT: merged.GOLD_MOVE_15M_PCT,
+    GOLD_MONITOR_INTERVAL_MS: merged.GOLD_MONITOR_INTERVAL_MS,
   });
 
   const dataDir = path.resolve(path.dirname(parsed.DB_PATH));
@@ -146,11 +169,29 @@ function buildConfig(): AppConfig {
       depthLimit: parsed.STRUCTURE_DEPTH_LIMIT,
       slippageNotional: parsed.STRUCTURE_SLIPPAGE_NOTIONAL,
     },
+    goldCause: {
+      enabled: parsed.GOLD_CAUSE_ENABLED,
+      symbol: parsed.GOLD_SYMBOL,
+      newsQueries: parsePipeList(parsed.GOLD_NEWS_QUERIES),
+      newsLookbackMinutes: parsed.GOLD_NEWS_LOOKBACK_MINUTES,
+      move5mPct: parsed.GOLD_MOVE_5M_PCT,
+      move15mPct: parsed.GOLD_MOVE_15M_PCT,
+      monitorIntervalMs: parsed.GOLD_MONITOR_INTERVAL_MS,
+    },
     markets,
     intervals,
     dataDir,
     reportsDir,
   };
+}
+
+function parsePipeList(input: string): readonly string[] {
+  const values = input
+    .split("|")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (values.length === 0) throw new Error("pipe-separated list must contain at least one value");
+  return values;
 }
 
 function parseStructureMarkets(
