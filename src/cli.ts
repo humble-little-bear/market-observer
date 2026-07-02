@@ -10,6 +10,7 @@ import { dispatchPendingBarkAlerts, sendBarkMarketSummary, sendBarkNotification 
 import { runDaemon } from "./daemon/worker.js";
 import { runGoldCause, runGoldCauseDaemon } from "./gold/run.js";
 import { renderGoldCauseBark, renderGoldCauseReport } from "./gold/reporting/text.js";
+import { renderPulseReport, runPulse, runPulseDaemon } from "./pulse/run.js";
 import { runServe } from "./server/serve.js";
 import { renderAlerts, renderStatus } from "./inspect/status.js";
 import cron from "node-cron";
@@ -226,6 +227,36 @@ export function buildProgram(): Command {
         await runGoldCauseDaemon({ logger: log, notify: opts.notify === true });
       } catch (e) {
         log.error("gold-daemon failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("pulse"))
+    .description("Scan 1m/5m short-window price pulse moves for configured markets")
+    .action(async (opts: { logLevel?: string }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        const result = await runPulse({ logger: log });
+        console.log(renderPulseReport(result));
+        closeDb();
+        process.exit(0);
+      } catch (e) {
+        log.error("pulse failed", e);
+        closeDb();
+        process.exit(1);
+      }
+    });
+
+  addLogLevelOption(program.command("pulse-daemon"))
+    .description("Run 1m/5m price pulse monitor; optionally pushes threshold-crossing alerts through Bark")
+    .option("--notify", "push triggered pulse alerts through Bark")
+    .action(async (opts: { logLevel?: string; notify?: boolean }) => {
+      const log = opts.logLevel ? makeLogger(asLogLevel(opts.logLevel)) : logger;
+      try {
+        await runPulseDaemon({ logger: log, notify: opts.notify === true });
+      } catch (e) {
+        log.error("pulse-daemon failed", e);
         closeDb();
         process.exit(1);
       }

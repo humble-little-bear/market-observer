@@ -78,6 +78,11 @@ optional). All three have safe public defaults:
 | `GOLD_MOVE_5M_PCT` | `0.4`                        | 5m gold move alert threshold |
 | `GOLD_MOVE_15M_PCT` | `0.8`                       | 15m gold move alert threshold |
 | `GOLD_MONITOR_INTERVAL_MS` | `300000`            | gold monitor loop interval |
+| `PULSE_MARKETS`    | unset                         | markets for 1m/5m price pulse alerts; defaults to `MARKETS` |
+| `PULSE_MOVE_1M_PCT` | `0.5`                       | 1m price pulse alert threshold |
+| `PULSE_MOVE_5M_PCT` | `1.0`                       | 5m price pulse alert threshold |
+| `PULSE_INTERVAL_MS` | `60000`                     | price pulse monitor loop interval |
+| `PULSE_ALERT_COOLDOWN_MS` | `300000`             | per-market/per-direction pulse push cooldown |
 
 See `.env.example`.
 
@@ -99,6 +104,8 @@ node dist/cli.js daemon    # long-lived collector → observer → alert worker
 node dist/cli.js serve     # read-only API + dashboard
 node dist/cli.js gold      # explain gold move + Fed/rates/dollar headlines
 node dist/cli.js gold-daemon --notify # push only threshold-crossing gold cause alerts
+node dist/cli.js pulse     # one-shot 1m/5m price pulse scan
+node dist/cli.js pulse-daemon --notify # push threshold-crossing 1m/5m pulse alerts
 node dist/cli.js status    # inspect DB freshness and latest observations
 node dist/cli.js alerts    # list recent alert events
 node dist/cli.js cron      # start the in-process scheduler (Ctrl+C to stop)
@@ -197,6 +204,37 @@ node dist/cli.js gold-daemon --notify
 
 The output maps headlines back to the gold screen indicators, especially `#4`
 10Y TIPS real yield, `#5` dollar index/proxy, and `#10` gold-S&P stress regime.
+
+## Price pulse alerts
+
+`pulse` is the fast “look up now” layer. It checks 1-minute Binance public
+klines for each configured pulse market, calculates 1m and 5m close-to-close
+changes, and emits very short Bark alerts when thresholds are crossed.
+
+It is intentionally separate from the existing 15m/1h/4h observation and
+structure alerts. Pulse alerts wake you up; the slower observer tells you
+whether the move changed trend, volatility, or structure.
+
+Run a one-shot scan:
+
+```bash
+node dist/cli.js pulse
+```
+
+Run the loop with Bark notifications:
+
+```bash
+node dist/cli.js pulse-daemon --notify
+```
+
+Defaults:
+
+```bash
+PULSE_MOVE_1M_PCT=0.5
+PULSE_MOVE_5M_PCT=1.0
+PULSE_INTERVAL_MS=60000
+PULSE_ALERT_COOLDOWN_MS=300000
+```
 
 First-pass alert rules:
 
